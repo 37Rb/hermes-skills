@@ -62,12 +62,15 @@ The agent handles all of this. It's documented here so you know what landed on y
 
 ```toml
 [alerts]
-r = 'hermes send --to matrix:!YOUR_ROOM_ID:matrix.org --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
+r = 'hermes send --to telegram:YOUR_CHAT_ID --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
+a = 'hermes send --to matrix:!YOUR_ROOM_ID:matrix.org --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
 ```
+
+Any target `hermes send` accepts works — Matrix, Telegram, Signal, Discord, Slack, SMS, or a bare platform name for its home channel. The value is just a shell command, so email via `himalaya` and desktop `notify-send` work the same way. Nothing in the skill prefers a platform.
 
 A reminder then picks offsets and channels: `@a 1h, 15m: r` fires an hour before and again 15 minutes before, both to `r`. See [`templates/alerts-config-example.toml`](templates/alerts-config-example.toml) for a fully commented example including email, SMS, and group chats — and for the several ways this file can bite you (an apostrophe in any value silently erases the whole section two commands later).
 
-Get valid delivery targets with `hermes send --list`. **Use exactly what it prints.** A wrong room id is a silent black hole: the send reports success, the alert is marked delivered and deleted, and the message reaches nobody.
+Get valid delivery targets with `hermes send --list`. **Use exactly what it prints.** A wrong target is a silent black hole: the send reports success, the alert is marked delivered and deleted, and the message reaches nobody.
 
 **2. The dispatcher cron job.** Tklr normally only fires alerts while its interactive UI is running. This skill replaces that with a once-a-minute job:
 

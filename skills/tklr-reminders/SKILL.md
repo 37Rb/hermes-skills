@@ -663,7 +663,7 @@ command -v notify-send             # desktop notification available?
 
 **Copy the target string from that output verbatim — never type one from
 memory, and never reuse one you saw in an example or in a previous session.**
-Room ids look guessable and are not; they change between installs. `hermes
+Target ids look guessable and are not; they differ between installs. `hermes
 send` prints `sent` and exits 0 for a room that does not exist, so a wrong id
 is a silent black hole: the dispatcher records a successful delivery, deletes
 the alert, and the message reaches nobody. `set_alert_channel.py` now checks
@@ -673,9 +673,14 @@ place the mistake is catchable.
 **Step 2 — report findings in plain language and ask only for a choice.** Not
 a wall of output, and no shell commands. Something like:
 
-> I can reach three places from here: a Matrix DM, a Matrix room called
+> I can reach three places from here: a direct chat, a group chat called
 > "Household", and email through your configured account. Where would you like
 > your reminders — and is anyone else using this?
+
+Name the platforms the way `hermes send --list` did — Matrix, Telegram, Signal,
+Discord, Slack, SMS, whatever this machine actually has. Nothing in this skill
+prefers one; the letter's command is just a shell command, so any target
+`hermes send` accepts works identically.
 
 If exactly one channel exists and only one person is involved, say what you're
 going to do and proceed rather than interrogating them.
@@ -880,10 +885,12 @@ email letter exists, only mention other people if they're set up:
 > dentist appointment?" "Am I free Tuesday at 3 for a coffee date?" — for that
 > last one I'll check what's around it, not just the slot itself.
 >
-> **How you get reminded.** Alerts reach you on Matrix. You can have several
-> per event at different times — "remind me a day before and again an hour
-> before" — and I'll pick sensible ones if you don't say. [If more than one
-> person is configured:] Jordan gets hers on Telegram, and a shared event can
+> **How you get reminded.** Alerts reach you on [name the channels you actually
+> configured — whatever `hermes send --list` offered, plus email or desktop if you
+> set those up. Never say "Matrix" unless that is what this machine uses]. You can
+> have several per event at different times — "remind me a day before and again an
+> hour before" — and I'll pick sensible ones if you don't say. [If more than one
+> person is configured:] Jordan gets hers on [her channel], and a shared event can
 > alert you both.
 >
 > **Changing and finishing things.** "I've done that" marks a task complete.

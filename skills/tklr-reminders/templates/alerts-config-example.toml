@@ -1,0 +1,76 @@
+# Example [alerts] section for a tklr workspace config.toml
+# (normally ~/.config/tklr/config.toml)
+#
+# This section IS the alert routing table. There is no separate config file.
+#
+# Each key is ONE LOWERCASE LETTER naming a delivery channel, and its value is
+# the command that performs the delivery. tklr enforces single lowercase
+# letters (a-z); `n` is built-in (bell + popup) and useless without the UI, so
+# 25 letters are available. Multi-character names are rejected.
+#
+# Because a letter's command is fixed, a letter identifies a
+# (person, channel) PAIR -- "chat" alone cannot know whose chat. Name them
+# per person, e.g. r/e/s for Alex, a/b for Jordan.
+#
+# A reminder then selects offsets and channels:
+#     @a 1h, 15m: r, e      an hour and 15 min before, to Alex's chat + email
+#     @a 1d: r, a           a day before, to Alex's chat and Jordan's chat
+#     @a 1d: r @a 15m: a    a day before for Alex, 15 min before for Jordan
+#
+# tklr substitutes these into the command before storing it:
+#     {name}        subject                    e.g. "Dentist visit"
+#     {when}        time remaining             e.g. "in 1 hour"
+#     {start}       scheduled time             e.g. "14:29"
+#     {time}        spoken form of start       e.g. "14 o 2 hours"
+#     {location}    location field
+#     {description} the @d details             e.g. "Bring the insurance card."
+#
+# IMPORTANT -- commands are run with shlex.split(), NOT a shell. So:
+#   * no pipes, redirects, or globbing unless you wrap them in `sh -c "..."`
+#   * quote any argument containing spaces, e.g. "{name} - {when}"
+#   * a double quote inside a subject or @d breaks parsing; the dispatcher
+#     reports and drops such an alert rather than retrying forever. Prefer
+#     typographic quotes in reminder text.
+#
+# WARNING -- never define a letter as a no-op like 'true' just to make an
+# entry validate. The dispatcher would treat it as a successful delivery and
+# delete the alert, so the reminder would silently never reach anyone.
+#
+# WARNING -- no apostrophes anywhere in a command value. tklr rewrites this
+# file on every run, re-emitting each value inside SINGLE quotes:
+#     {{ key }} = '{{ value }}'          (tklr_env.py CONFIG_TEMPLATE)
+# An apostrophe therefore closes the string early and produces invalid TOML.
+# The next tklr command reports "Config error ... Using defaults" and rewrites
+# the file with NO [alerts] section at all -- your channels vanish two
+# commands after you saved them. Write "It is time", never "It's time".
+#
+# After editing this section, run any tklr command TWICE and confirm the
+# letters are still present. Erasure takes two runs, so one check is not enough.
+
+[alerts]
+
+# --- <person> -----------------------------------------------------------
+# EVERY target below is a PLACEHOLDER. Do not copy these lines as they are:
+# look the real target up with `hermes send --list` and paste that. A wrong
+# room id fails silently -- the send succeeds, it just goes somewhere nobody
+# is reading.
+#
+# Chat. Get valid targets from `hermes send --list`.
+r = 'hermes send --to matrix:!ROOM_ID_FROM_HERMES_SEND_LIST:matrix.org --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
+
+# Email. himalaya reads a full message; keep it on one line.
+e = 'sh -c "printf \"To: alex@example.com\\nSubject: Reminder: {name} — starts {when}\\n\\n{name}\\nWhen: {start} ({when})\\n{description}\\n\" | himalaya message send"'
+
+# SMS / text, via a chat platform that bridges to SMS.
+s = 'hermes send --to signal:+15555550123 --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
+
+# --- Jordan -----------------------------------------------------------
+a = 'hermes send --to telegram:-1001234567890 --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
+b = 'sh -c "printf \"To: jordan@example.com\\nSubject: Reminder: {name} — starts {when}\\n\\n{name}\\nWhen: {start}\\n{description}\\n\" | himalaya message send"'
+
+# --- Shared / other ---------------------------------------------------
+# Desktop notification on this machine.
+d = 'notify-send "⏰ Reminder: {name}" "starts {when} ({start}). {description}"'
+
+# A whole household group chat.
+g = 'hermes send --to "matrix:!GROUP_ROOM_ID_FROM_HERMES_SEND_LIST:matrix.org" --quiet "⏰ Reminder: {name} — starts {when} ({start})"'

@@ -58,15 +58,21 @@
 # Chat. Get valid targets from `hermes send --list`.
 r = 'hermes send --to matrix:!ROOM_ID_FROM_HERMES_SEND_LIST:matrix.org --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
 
-# Email. himalaya reads a full message; keep it on one line.
-e = 'sh -c "printf \"To: alex@example.com\\nSubject: Reminder: {name} — starts {when}\\n\\n{name}\\nWhen: {start} ({when})\\n{description}\\n\" | himalaya message send"'
+# Email, via himalaya -- the standard way Hermes reaches email. Find accounts
+# with `himalaya account list --json`; if there are none, email is not available.
+#
+# `From:` IS MANDATORY and must be the himalaya account's own address. Without it
+# himalaya exits 1 with "No `From:` header found in raw message" and nothing is
+# sent -- so every alert on the letter fails. `To:` is where that person actually
+# reads mail, which is often a different address; ask, do not assume.
+e = 'sh -c "printf \"From: account@example.com\\nTo: alex@example.com\\nSubject: Reminder: {name} - starts {when} ({start})\\n\\n{name}\\nWhen: {start} ({when})\\n{description}\\n\" | himalaya message send"'
 
 # SMS / text, via a chat platform that bridges to SMS.
 s = 'hermes send --to signal:+15555550123 --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
 
 # --- Jordan -----------------------------------------------------------
 a = 'hermes send --to telegram:-1001234567890 --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
-b = 'sh -c "printf \"To: jordan@example.com\\nSubject: Reminder: {name} — starts {when}\\n\\n{name}\\nWhen: {start}\\n{description}\\n\" | himalaya message send"'
+b = 'sh -c "printf \"From: account@example.com\\nTo: jordan@example.com\\nSubject: Reminder: {name} - starts {when} ({start})\\n\\n{name}\\nWhen: {start}\\n{description}\\n\" | himalaya message send"'
 
 # --- Shared / other ---------------------------------------------------
 # Desktop notification on this machine.

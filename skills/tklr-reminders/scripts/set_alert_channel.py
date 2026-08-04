@@ -14,6 +14,7 @@ of them so callers never have to:
 
 Usage
   set_alert_channel.py --list
+  set_alert_channel.py --mail-accounts        # himalaya account -> From: address
   set_alert_channel.py r 'hermes send --to matrix:!room:server --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
   set_alert_channel.py --remove r
   set_alert_channel.py --home ~/.config/tklr r '<command>'
@@ -145,6 +146,81 @@ def verify_round_trip(home: Path, config: Path, expect: set[str]) -> bool:
     return True
 
 
+def mail_accounts() -> list[tuple[str, str]]:
+    """Return [(account_name, from_address)] for each himalaya account.
+
+    `himalaya account list --json` gives the account NAME only -- neither it nor
+    `account check` reveals the address, and the `From:` header a delivery command
+    needs must be the account's own address. The address lives solely in
+    himalaya's config.
+
+    That config also holds credentials, so this reads it here, once, and emits
+    nothing but addresses. Do not have an agent parse that file directly: it is a
+    plaintext-password file in a common setup, and a stray dump leaks the lot.
+
+    Key names vary by auth mechanism (`sasl.plain.authcid`, `login`, or a
+    top-level `email`), so rather than hardcoding one path this walks the
+    account's subtree and takes the first address-shaped value, preferring
+    explicitly-named keys. Skips anything that smells like a secret.
+    """
+    cfg = Path.home() / ".config" / "himalaya" / "config.toml"
+    if not cfg.is_file():
+        return []
+    try:
+        data = tomllib.loads(cfg.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, OSError):
+        return []
+    accounts = data.get("accounts")
+    if not isinstance(accounts, dict):
+        return []
+
+    SECRET = ("pass", "secret", "token", "key", "cmd")
+    PREFERRED = ("email", "authcid", "login", "user", "from")
+
+    def find(node, depth=0):
+        """Yield (key_rank, value) for address-shaped strings under *node*."""
+        if depth > 6 or not isinstance(node, dict):
+            return
+        for k, v in node.items():
+            kl = str(k).lower()
+            if any(s in kl for s in SECRET):
+                continue
+            if isinstance(v, str) and "@" in v and " " not in v.strip():
+                rank = PREFERRED.index(kl) if kl in PREFERRED else len(PREFERRED)
+                yield rank, v.strip()
+            elif isinstance(v, dict):
+                yield from find(v, depth + 1)
+
+    out = []
+    for name, acct in accounts.items():
+        hits = sorted(find(acct))
+        if hits:
+            out.append((str(name), hits[0][1]))
+    return out
+
+
+def check_mail_headers(command: str) -> None:
+    """Refuse a himalaya command with no `From:` header.
+
+    himalaya takes the envelope sender from the message's `From:` header and has
+    no fallback: without one it exits 1 with "No `From:` header found in raw
+    message" and sends nothing, so every alert on the letter fails for the life
+    of the reminder. This skill shipped exactly that command for months, because
+    a letter can be created and validated without an email ever being sent.
+    """
+    if "himalaya" not in command:
+        return
+    if re.search(r"(?i)\bFrom:", command):
+        return
+    die("this himalaya command has no `From:` header.\n"
+        "       himalaya takes the envelope sender from `From:` and has no\n"
+        "       default -- it would exit 1 with \"No `From:` header found in raw\n"
+        "       message\" every time, so the alert would never be delivered.\n"
+        "       Add it as the first header, set to the himalaya account's own\n"
+        "       address (`himalaya account list --json` names the accounts):\n"
+        "         printf \"From: account@example.com\\\\nTo: them@example.com\\\\n...\"")
+
+
 def check_send_target(command: str) -> None:
     """Refuse a `hermes send --to` target that does not exist.
 
@@ -160,8 +236,6 @@ def check_send_target(command: str) -> None:
     if not m:
         return
     target = m.group(1).strip("\"'")
-    if ":" not in target:
-        return  # bare platform name ("telegram") means the home channel
 
     try:
         listed = subprocess.run(["hermes", "send", "--list"], capture_output=True,
@@ -172,10 +246,37 @@ def check_send_target(command: str) -> None:
         return
 
     available = re.findall(r"\b\w+:\S+", listed.stdout)
-    if not available:
-        return
+    # Platform names come from the `platform:id` targets and from the section
+    # headings `--list` groups them under ("Matrix:"), so a platform configured
+    # with only a home channel is still recognised.
+    platforms = {c.split(":", 1)[0].lower() for c in available}
+    platforms |= {s.lower() for s in re.findall(r"^\s*([A-Za-z][\w-]*):\s*$",
+                                                listed.stdout, re.M)}
+
+    # The platform is a closed set and always checkable. Getting it wrong -- an
+    # account or provider name where a platform belongs -- would otherwise be
+    # written into config.toml unchallenged, and every alert on that letter
+    # fails for the life of the reminder.
+    platform = target.split(":", 1)[0].lower() if ":" in target else target.lower()
+    if platforms and platform not in platforms:
+        die(f"'{platform}' is not a messaging platform on this machine.\n"
+            f"       Configured platforms: {', '.join(sorted(platforms))}\n"
+            "       A target is `<platform>:<id>`, or a bare platform name for its\n"
+            "       home channel -- never an account or provider name. Take one\n"
+            "       from `hermes send --list`.")
+
+    if ":" not in target or not available:
+        return  # bare platform name means the home channel; nothing more to check
 
     ident = target.split(":", 1)[1].split("/")[0]
+
+    # Only chat ids are enumerable, and they are the ones that fail silently.
+    # Email addresses and phone numbers are open-ended -- `--list` cannot know
+    # every address you might mail -- so checking them against it would reject
+    # perfectly good targets.
+    if "@" in ident or ident.startswith("+"):
+        return
+
     if any(ident and ident in cand for cand in available):
         return
 
@@ -192,6 +293,8 @@ def main() -> int:
     ap.add_argument("command", nargs="?", help="the delivery command")
     ap.add_argument("--home", default=None, help="tklr workspace (default $TKLR_HOME or ~/.config/tklr)")
     ap.add_argument("--list", action="store_true", help="show configured letters and exit")
+    ap.add_argument("--mail-accounts", action="store_true",
+                    help="print 'account<TAB>address' per himalaya account (the From: address)")
     ap.add_argument("--remove", metavar="LETTER", help="delete a letter")
     args = ap.parse_args()
 
@@ -199,6 +302,15 @@ def main() -> int:
     config = home / "config.toml"
     if not config.exists():
         die(f"no config at {config} — run install.sh first")
+
+    if args.mail_accounts:
+        found = mail_accounts()
+        if not found:
+            print("no himalaya email accounts found")
+            return 1
+        for name, addr in found:
+            print(f"{name}\t{addr}")
+        return 0
 
     if args.list:
         alerts = read_alerts(config)
@@ -242,6 +354,7 @@ def main() -> int:
             "       delivered and delete it, so the reminder would reach nobody.\n"
             "       Use a real delivery command.")
     check_send_target(command)
+    check_mail_headers(command)
 
     existing = read_alerts(config)
     verb = "updated" if letter in existing else "added"

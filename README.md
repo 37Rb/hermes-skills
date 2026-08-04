@@ -21,6 +21,8 @@ hermes skills install 37Rb/hermes-skills/skills/tklr-reminders --category produc
 
 A *tap* is just a GitHub repo Hermes searches for skills. `hermes skills tap add` always looks in this repo's `skills/` directory, and treats each subdirectory there as one skill.
 
+Once installed, load a skill by name: `/tklr-reminders`. **On Matrix and Slack use `!` instead of `/`** — those clients reserve `/` for their own commands, so a typed `/` never reaches Hermes. Invoking by name loads the skill directly, which is more reliable than describing what you want and hoping the right skill is picked.
+
 `--category` picks the folder it lands in under `~/.hermes/skills/`. It's organisational only — a skill works the same installed flat. See each skill's own README for what it needs and how to set it up.
 
 To browse before installing:

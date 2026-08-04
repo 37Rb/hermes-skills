@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# nuclear-uninstall.sh — return this machine to the state of someone who has
-# just obtained the tklr-reminders skill and not yet set it up.
+# reset.sh — return this machine to the state of someone who has just obtained
+# the tklr-reminders skill and not yet set it up, so setup can be tested from
+# scratch.
 #
-#   bash nuclear-uninstall.sh              interactive, requires typing NUKE
-#   bash nuclear-uninstall.sh --dry-run    show exactly what would happen
-#   bash nuclear-uninstall.sh --yes        skip the prompt (for scripted testing)
+#   bash reset.sh              interactive, requires typing NUKE
+#   bash reset.sh --dry-run    show exactly what would happen
+#   bash reset.sh --yes        skip the prompt (for scripted testing)
 #
 # THIS DESTROYS ALL YOUR REMINDERS. ~/.config/tklr holds every event, task,
 # and note you have entered — there is no undo. Take a copy first if you care:
@@ -20,22 +21,22 @@
 #   7. the ENTIRE tklr workspace          (~/.config/tklr — config AND database)
 #   8. tklr itself, only if uv owns it   (uv tool uninstall tklr-dgraham)
 #
-# What it deliberately KEEPS:
-#   * the skill source directory itself. That is the thing under test — a new
-#     person starts with these files present and nothing configured. Deleting
-#     them would leave nothing to test. Pass --purge-skill if you really want
-#     the directory gone too.
+# What it NEVER touches:
+#   * the skill source directory itself — SKILL.md, scripts/, templates/,
+#     references/. That is the thing under test: a new person starts with these
+#     files present and nothing configured, so deleting them would leave nothing
+#     to test. It is also version-controlled work that this script has no
+#     business removing. There is deliberately no flag to override this; nothing
+#     below ever writes to or deletes anything under SKILL_DIR.
 
 set -uo pipefail
 
 DRY_RUN=0
 ASSUME_YES=0
-PURGE_SKILL=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         --yes|-y)  ASSUME_YES=1; shift ;;
-        --purge-skill) PURGE_SKILL=1; shift ;;
         -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -135,14 +136,9 @@ fi
 [[ -f "$SUGGESTIONS" ]] && grep -q "tklr" "$SUGGESTIONS" 2>/dev/null && \
     { echo "  - blueprint suggestion in $SUGGESTIONS"; FOUND=1; }
 [[ -f "$SNAPSHOT" ]] && { echo "  - cached skill index $SNAPSHOT (rebuilt automatically)"; FOUND=1; }
-if [[ $PURGE_SKILL -eq 1 ]]; then
-    echo "  - THE SKILL SOURCE: $SKILL_DIR"
-    FOUND=1
-else
-    echo
-    echo "Keeping the skill source at $SKILL_DIR"
-    echo "  (that is what a new person starts with; --purge-skill removes it too)"
-fi
+echo
+echo "Keeping the skill source at $SKILL_DIR"
+echo "  (that is what a new person starts with — this script never removes it)"
 
 if [[ $FOUND -eq 0 ]]; then
     echo "  nothing — already pristine."
@@ -313,12 +309,9 @@ else
     skip "tklr not on PATH"
 fi
 
-# --------------------------------------------------------- 9. skill source
-if [[ $PURGE_SKILL -eq 1 ]]; then
-    step "skill source"
-    act "rm -rf $SKILL_DIR"
-    [[ $DRY_RUN -eq 0 ]] && rm -rf "$SKILL_DIR"
-fi
+# The skill source directory is deliberately absent from this script's removal
+# steps. It is what a fresh install starts from and it is version-controlled;
+# nothing here should ever delete it.
 
 # ------------------------------------------------------------------ verify
 step "result"

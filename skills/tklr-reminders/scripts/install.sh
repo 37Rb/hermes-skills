@@ -172,9 +172,12 @@ else
   FOR THE AGENT — do these yourself. Do not paste them to the user; they are
   your steps, not theirs. Ask the user only which channels they want.
 
-  1. Discover what this machine can reach — run these:
-       hermes send --list
-       himalaya account list      (email, if installed)
+  1. Discover what this machine can reach — run both:
+       hermes send --list            (chat targets)
+       himalaya account list --json  (email accounts; himalaya is how email works)
+     For an email letter you also need the account's own address for From: --
+     get it with:  set_alert_channel.py --mail-accounts
+     (never read ~/.config/himalaya/config.toml yourself; it holds credentials)
   2. Tell the user in plain language what you found, and ask where they want
      reminders sent, and whether anyone else uses this.
   3. Add one lowercase letter per (person, channel) USING THE HELPER. Do not

@@ -31,11 +31,15 @@ hermes skills install 37Rb/hermes-skills/skills/tklr-reminders --category produc
 
 `--category productivity` files it under `~/.hermes/skills/productivity/`. Leave the flag off and it installs flat at `~/.hermes/skills/tklr-reminders` — the skill works either way, since Hermes only uses the category for grouping.
 
-Then ask your agent to set up your tklr reminders:
+Then invoke the skill:
 
-> Set up my tklr reminders
+> `/tklr-reminders`
 
-It installs tklr, creates the workspace, installs the alert dispatcher, creates the cron job, and asks you the one thing it can't work out on its own: which of your communication channels it should use to send alerts.
+No further wording needed — that loads the skill and it takes it from there: installs tklr, creates the workspace, installs the alert dispatcher, creates the cron job, and asks you the one thing it can't work out on its own, which is which of your channels should receive alerts.
+
+**On Matrix and Slack, type `!tklr-reminders` instead.** Those clients reserve `/` for their own commands, so a typed `/` never reaches Hermes; their adapters accept `!` and rewrite it. Every other platform uses `/`.
+
+Use the explicit invocation for the first run rather than asking in your own words. Every skill is registered as `/<skill-name>`, and invoking it loads the skill directly — no guessing about whether your phrasing matched. Something like "set up my reminders" relies on the agent picking this skill out of ~65 others from a one-line description, which it may not do, especially if you have used a different calendar tool with it before. Once setup is done, plain language works fine for everyday use.
 
 <details>
 <summary>What the installer does</summary>
@@ -66,7 +70,7 @@ r = 'hermes send --to telegram:YOUR_CHAT_ID --quiet "⏰ Reminder: {name} — st
 a = 'hermes send --to matrix:!YOUR_ROOM_ID:matrix.org --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
 ```
 
-Any target `hermes send` accepts works — Matrix, Telegram, Signal, Discord, Slack, SMS, or a bare platform name for its home channel. The value is just a shell command, so email via `himalaya` and desktop `notify-send` work the same way. Nothing in the skill prefers a platform.
+A letter's value is a plain shell command, so anything this machine can send with works. Chat goes through `hermes send` — Matrix, Telegram, Signal, Discord, Slack, SMS, or a bare platform name for its home channel — and email goes through `himalaya`, which is how Hermes reaches email. Desktop notifications are just `notify-send`. Nothing in the skill prefers one platform over another; whatever `hermes send --list` and `himalaya account list` report is what you can use.
 
 A reminder then picks offsets and channels: `@a 1h, 15m: r` fires an hour before and again 15 minutes before, both to `r`. See [`templates/alerts-config-example.toml`](templates/alerts-config-example.toml) for a fully commented example including email, SMS, and group chats — and for the several ways this file can bite you (an apostrophe in any value silently erases the whole section two commands later).
 
@@ -90,7 +94,7 @@ you → agent → scripts/tklr_agent_wrapper.py → tklr → tklr.db
                                                        │
         hermes cron (every minute) → scripts/tklr_alert_poller.py
                                                        │
-                                    hermes send / himalaya / notify-send
+                            hermes send (chat) / himalaya (email) / notify-send
 ```
 
 The dispatcher reads due alerts, runs each one's command, and deletes the row on success — so one row per (offset, channel) gives exact once-only delivery with no separate send ledger. Undelivered rows are retried until they're an hour late, then reported and dropped rather than retried forever.
@@ -107,7 +111,7 @@ scripts/tklr_alert_poller.py          the every-minute dispatcher
 scripts/set_alert_channel.py          safely edit [alerts]; validates targets
 scripts/tklr_mutate.py                low-level record edits
 scripts/install.sh                    idempotent setup / readiness check
-scripts/nuclear-uninstall.sh          remove everything this skill installed
+scripts/reset.sh                      undo the setup, back to a pristine state
 templates/alerts-config-example.toml  commented [alerts] reference
 ```
 

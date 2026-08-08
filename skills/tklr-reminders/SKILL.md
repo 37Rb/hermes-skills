@@ -128,8 +128,9 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    up — "remind Amanda too" is a fine reason to use the name. Memory supplying
    the name is not.
 3. **Everything goes through `$R`. Never call `tklr` yourself.** Subcommands:
-   `add`, `list`, `show`, `find`, `free`, `done`, `delete`, `move`, `channels`,
-   `status`, `setup`, `email`, `welcome`. `python3 $R --help` lists them.
+   `add`, `list`, `show`, `find`, `free`, `done`, `delete`, `move`, `uses`,
+   `channels`, `status`, `setup`, `email`, `welcome`. `python3 $R --help` lists
+   them.
 
    Calling `tklr` directly is how every silent failure in this skill has
    happened: a missing itemtype character becomes a draft, `tomorrow 3p` is

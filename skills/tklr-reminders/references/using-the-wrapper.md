@@ -61,6 +61,7 @@ reminders will go to someone else.
 | "Show me everything for the lake house" | `$R find "lake"` |
 
 | "Tell me about that one" | `$R show <id>` |
+| "Where did my time go?" | `$R uses` — jot totals by category and month |
 
 Then *answer the question* — don't paste raw output. "You've got two things
 today: coffee with Sam at 11:30, and the budget review at 7. Your afternoon
@@ -111,7 +112,7 @@ when each alert will fire.
 
 | Flag | Meaning |
 |------|---------|
-| `--type` | `event`, `task`, `project`, `note`, `goal` |
+| `--type` | `event`, `task`, `project`, `goal`, `note`, `jot` |
 | `--subject` | what it is, in plain words |
 | `--when` | `"tomorrow 3pm"`, `"friday"`, `"in 2 hours"`, `"2026-08-15 09:00"` |
 | `--duration` | `30m`, `1h`, `1h30m` |
@@ -120,6 +121,10 @@ when each alert will fire.
 | `--via` | channel letters: `r`, or `r,e` |
 | `--note` `--location` `--priority` `--notice` | extra detail, place, 1–5, early warning |
 | `--repeat` | tklr recurrence, e.g. `"d &w MO,TU,WE,TH,FR"` |
+| `--offset` | for tasks: reschedule this long **after completion**, e.g. `3d` |
+| `--travel` | travel held either side: `30m` or `30m,15m` (before,after) |
+| `--timezone` | zone for `--when`, e.g. `US/Pacific`, or `none` to float |
+| `--use` | jots only: time-tracking category, e.g. `exercise.walking` |
 | `--target` | goal target, e.g. `3/1w` |
 | `--step` (repeatable) `--chain` | project steps; `--chain` makes each depend on the previous |
 | `--dry-run` | show the entry and alert times, write nothing |
@@ -147,14 +152,17 @@ All verified against tklr 1.0.43. `R` is `scripts/tklr_agent_wrapper.py`.
 | "1:1 with Dana every other Tuesday at 10" | `--type event --subject "1:1 with Dana" --when "2026-08-04 10am" --duration 30m --repeat "w &i 2 &w TU" --for alex --alert 10m --via r` |
 | "Remember to buy milk" | `--type task --subject "Buy milk" --for alex` |
 | "Renew my passport by Sept 1, start warning me a month out" | `--type task --subject "Renew passport" --when 2026-09-01 --priority 1 --notice 30d --for alex --alert 1w --via r` |
-| "Water the plants every 3 days after I last did it" | `--raw '~ Water plants @s 2026-08-01 @o 3d @b alex/users @a 1h: r'` (no flag for `@o` yet) |
+| "Water the plants every 3 days after I last did it" | `--type task --subject "Water plants" --when 2026-08-01 --offset 3d --for alex --alert 1h --via r` |
 | "Plan the trip — flights, hotel, dog sitter" | `--type project --subject "Plan trip" --for alex --step "Book flights" --step "Reserve hotel" --step "Arrange dog sitter"` |
 | "Renovate: demo, then rewire, then drywall" | `--type project --subject Renovate --for alex --step Demo --step Rewire --step Drywall --chain` |
 | "I want to exercise 3 times a week" | `--type goal --subject Exercise --when 2026-08-01 --target 3/1w --for alex` |
 | "Lunch with Priya at Cafe Ambrosia Tuesday noon" | `--type event --subject "Lunch with Priya" --when "tuesday noon" --duration 1h --location "Cafe Ambrosia" --for alex --alert 30m --via r` |
-| "Flight at 3pm Pacific on the 10th" | `--raw '* Flight to Seattle @s 2026-08-10 3p z US/Pacific @e 5h @b alex/users @a 3h: r'` (no flag for timezones yet) |
-| "Team meeting at 2, 30 min travel each way" | `--raw '* Team meeting @s 2026-08-06 2p @e 1h @w 30m, 30m @b alex/users @a 1h: r'` (no flag for `@w` yet) |
+| "Flight at 3pm Pacific on the 10th" | `--type event --subject "Flight to Seattle" --when "2026-08-10 3pm" --timezone US/Pacific --duration 5h --for alex --alert 3h --via r` |
+| "Team meeting at 2, 30 min travel each way" | `--type event --subject "Team meeting" --when "2026-08-06 2pm" --duration 1h --travel "30m,30m" --for alex --alert 1h --via r` |
 | "Note: Sam prefers morning meetings" | `--type note --subject "Sam prefers morning meetings" --for alex` |
+| "Jot down that I am taking a walk" | `--type jot --subject "Taking a walk" --for alex` (timestamped now; pass `--when` for a different time) |
+| "That walk took an hour and a quarter, count it as exercise" | `--type jot --subject "Taking a walk" --duration 1h15m --use exercise.walking --for alex` |
+| "Where did my time go this month?" | `uses` (add `--use exercise` to filter, `--months 2607-2608` for a range) |
 
 ## Changing and completing things
 

@@ -21,7 +21,8 @@ Every operation is a subcommand. Run `--help` on any of them for its flags:
     show      everything about one         find      search, or one person's
     free      what is around a time        done      mark a task complete
     delete    remove one or an occurrence  move      reschedule an occurrence
-    channels  list/configure alert routes  status    is it all set up
+    uses      where jot time went          channels  list/configure alerts
+    status    is it all set up
     setup     build the whole delivery     email     add email as a channel
               path for one platform                  (himalaya)
     welcome   what to tell the user (send its output as-is)
@@ -78,6 +79,13 @@ ITEMTYPE = {
     "project": "^",
     "note": "%",
     "goal": "!",
+    "jot": "-",
+    # No "draft" (`?`) on purpose. tklr has one, but it is an editing state
+    # rather than a reminder: it fires nothing and appears on no schedule. An
+    # assistant with the user right there should ask the missing question
+    # instead of filing something that cannot go off -- and `?` stays
+    # unambiguous as the thing `add` refuses, which is how a silently
+    # downgraded invalid entry gets caught.
 }
 
 WEEKDAYS = {
@@ -332,6 +340,11 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
                     "Use e.g. US/Pacific, Europe/London, or 'none' for a floating time.")
             stamp = f"{resolved} z {tz}"
         parts.append(f"@s {stamp}")
+    elif args.type == "jot":
+        # A jot is a timestamped note to self, and the timestamp is the whole
+        # point: "taking a walk" means now unless they said otherwise.
+        resolved, has_time = f"{now:%Y-%m-%d %H:%M}", True
+        parts.append(f"@s {resolved}")
     elif args.type in ("event", "goal"):
         die(f"a {args.type} needs --when")
     elif args.timezone:
@@ -421,6 +434,20 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
     elif args.type in ("event", "task") and args.when:
         warnings.append("no alert set — this reminder will not notify anyone "
                         "(pass --alert and --via if it should)")
+
+    if args.use:
+        use = args.use.strip()
+        # tklr enforces this itself ("The use of @u is not supported in type
+        # '~' reminders"), but failing here names the right alternative.
+        if args.type != "jot":
+            die(f"--use only means something on a jot; this is a {args.type}.",
+                "Jots are tklr's time-tracking type: a timestamped line, how",
+                "long it took (--duration), and the category it counts toward.")
+        if not re.fullmatch(r"[A-Za-z0-9][\w.-]*", use):
+            die(f"--use {use!r} is not a use name",
+                "Letters, digits, dots, dashes and underscores, no spaces.",
+                "A dot nests it: exercise.walking totals under exercise.")
+        parts.append(f"@u {use}")
 
     if args.note:
         # @d must come last: tklr treats the rest of the entry as its value.
@@ -590,8 +617,9 @@ def cmd_done(args, home: Path, now: datetime) -> int:
     out = (proc.stdout or "") + (proc.stderr or "")
     if "No changes made" in out:
         die(f"id {args.id} could not be completed.",
-            "Only tasks can be finished. If it is an appointment, delete it "
-            f"instead:  {sys.argv[0]} delete {args.id}")
+            "Tasks, project steps and goals can be finished — a goal records "
+            "the completion and keeps running. If this is an appointment, "
+            f"delete it instead:  {sys.argv[0]} delete {args.id}")
     show_output(proc)
     return 0
 
@@ -626,6 +654,37 @@ def cmd_move(args, home: Path, now: datetime) -> int:
     if args.dry_run:
         extra.append("--dry-run")
     return delegate("tklr_mutate.py", ["reschedule", str(args.id), *extra], home)
+
+
+def cmd_uses(args, home: Path, now: datetime) -> int:
+    """Where jot time went, by category.
+
+    The second half of tklr's jot model. A jot is captured in a few words while
+    something is happening; later it gains `--duration` and `--use`, and this is
+    what those were for -- totals per category and month, rather than a pile of
+    timestamped lines nobody reads back.
+    """
+    if args.list:
+        proc = run_tklr(home, "uses", "list")
+    else:
+        cmd = ["uses", "report"]
+        if args.use:
+            cmd += ["--use", args.use]
+        if args.months:
+            cmd += ["--months", args.months]
+        proc = run_tklr(home, *cmd)
+
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if ("No uses defined" in out or "No matching jots" in out
+            or not out.strip()):
+        print("no jot time has been categorised yet.")
+        print("  A jot records that something happened; --duration says how "
+              "long it took")
+        print("  and --use says what it counts toward. Only jots carrying both "
+              "appear here.")
+        return 0
+    show_output(proc)
+    return 0
 
 
 def cmd_channels(args, home: Path, now: datetime) -> int:
@@ -1474,7 +1533,11 @@ def cmd_add(args, home: Path, now: datetime) -> int:
     for w in warnings:
         print(f"  note: {w}")
 
-    chk = run_tklr(home, "check", entry)
+    # `--` before the entry: a jot starts with "-", which tklr's CLI would
+    # otherwise parse as an option ("Error: No such option '- '"). It is why
+    # tklr ships a separate `jot` command; the separator does the same job and
+    # is harmless for every other type.
+    chk = run_tklr(home, "check", "--", entry)
     if "Entry is valid" not in (chk.stdout or ""):
         detail = [l.strip() for l in (chk.stdout or "").splitlines()
                   if l.strip() and "aggregate" not in l and "DateTimes" not in l]
@@ -1486,7 +1549,7 @@ def cmd_add(args, home: Path, now: datetime) -> int:
         print("  (nothing was written)")
         return 0
 
-    add = run_tklr(home, "add", entry)
+    add = run_tklr(home, "add", "--", entry)
     out = (add.stdout or "") + (add.stderr or "")
     if "Added 1 entry" not in out:
         detail = [l.rstrip() for l in out.splitlines()
@@ -1667,13 +1730,17 @@ def main() -> int:
             "  %(prog)s --type event --subject \"Standup\" --when \"tomorrow 9am\" \\\n"
             "      --repeat \"every weekday\" --for alex,jordan --alert 10m --via r\n"))
     a.add_argument("--type", choices=sorted(ITEMTYPE),
-                   help="event (has a time), task (to do), project, goal, note")
+                   help="event (has a time), task (to do), project (tasks with "
+                        "steps), goal (n per period), note (reference), jot "
+                        "(timestamped log line)")
     a.add_argument("--subject", help="what it is, in plain words")
     a.add_argument("--when", help="'tomorrow 3pm', 'friday', 'in 2 hours', '2026-08-15 09:00'")
     a.add_argument("--duration", help="how long it lasts, e.g. 1h, 30m")
     a.add_argument("--for", dest="for_whom", help="comma-separated people, e.g. alex,jordan")
     a.add_argument("--alert", help="offsets BEFORE the start, e.g. 1d,1h,15m (needs --via)")
     a.add_argument("--via", help="channel letters to deliver on, e.g. r,e (needs --alert)")
+    a.add_argument("--use", help="for jots: the time-tracking category it counts "
+                   "toward, e.g. exercise.walking (a dot nests it under exercise)")
     a.add_argument("--note", help="free-text detail")
     a.add_argument("--location", help="where")
     a.add_argument("--priority", type=int, help="1 (highest) to 5 (lowest)")
@@ -1731,6 +1798,13 @@ def main() -> int:
                    help="with --set: skip the delivery test (leaves it unproven)")
     c.add_argument("--email", help=EMAIL_HELP)
     c.set_defaults(fn=cmd_channels)
+
+    u = sub.add_parser("uses", help="where jot time went, by category")
+    u.add_argument("--use", help="filter by category substring, e.g. exercise")
+    u.add_argument("--months", help="YYMM or YYMM-YYMM; default previous+current")
+    u.add_argument("--list", action="store_true",
+                   help="list the category names instead of the totals")
+    u.set_defaults(fn=cmd_uses)
 
     st = sub.add_parser("status", help="is everything set up and working")
     st.add_argument("--email", help=EMAIL_HELP)

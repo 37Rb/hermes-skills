@@ -25,6 +25,16 @@
 #     {location}    location field
 #     {description} the @d details             e.g. "Bring the insurance card."
 #
+# THAT IS THE COMPLETE LIST. Anything else in braces -- {message}, {subject},
+# {title} -- is not substituted and reaches the user as literal text, on every
+# alert, for the life of the letter. Copy a message shape from below and change
+# only the target. Keep the word "Reminder" and a verb before the time, too:
+# without them the alert reads as an assistant ANNOUNCING an upcoming reminder
+# instead of being the reminder.
+#
+# ({time} is a real placeholder but avoid it: with `ampm = false` it renders
+# minutes as garbage -- "Sunday at 22 o 4 hours". Use {start}.)
+#
 # IMPORTANT -- commands are run with shlex.split(), NOT a shell. So:
 #   * no pipes, redirects, or globbing unless you wrap them in `sh -c "..."`
 #   * quote any argument containing spaces, e.g. "{name} - {when}"
@@ -50,13 +60,14 @@
 [alerts]
 
 # --- <person> -----------------------------------------------------------
-# EVERY target below is a PLACEHOLDER. Do not copy these lines as they are:
-# look the real target up with `hermes send --list` and paste that. A wrong
-# room id fails silently -- the send succeeds, it just goes somewhere nobody
-# is reading.
+# EVERY target below is a PLACEHOLDER, platform name included. Do not copy
+# these lines as they are: look the real target up with `hermes send --list`
+# and paste that. A wrong id fails silently -- the send succeeds, it just goes
+# somewhere nobody is reading.
 #
-# Chat. Get valid targets from `hermes send --list`.
-r = 'hermes send --to matrix:!ROOM_ID_FROM_HERMES_SEND_LIST:matrix.org --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
+# Chat. The platform should be the one the user is talking to you on; get the
+# target from `hermes send --list <platform>`.
+r = 'hermes send --to PLATFORM:TARGET_FROM_HERMES_SEND_LIST --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
 
 # Email, via himalaya -- the standard way Hermes reaches email. Find accounts
 # with `himalaya account list --json`; if there are none, email is not available.
@@ -79,4 +90,4 @@ b = 'sh -c "printf \"From: account@example.com\\nTo: jordan@example.com\\nSubjec
 d = 'notify-send "⏰ Reminder: {name}" "starts {when} ({start}). {description}"'
 
 # A whole household group chat.
-g = 'hermes send --to "matrix:!GROUP_ROOM_ID_FROM_HERMES_SEND_LIST:matrix.org" --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
+g = 'hermes send --to "PLATFORM:GROUP_TARGET_FROM_HERMES_SEND_LIST" --quiet "⏰ Reminder: {name} — starts {when} ({start})"'

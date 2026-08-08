@@ -53,6 +53,11 @@ Usage:
   tklr_alert_poller.py --verbose   report what was seen even when nothing was
                                    due -- use this when verifying setup, because
                                    silence alone does NOT mean "delivered"
+  tklr_alert_poller.py --check     REPORT ONLY. Sends nothing, deletes nothing,
+                                   rebuilds nothing. This is what `status` runs,
+                                   so inspecting a pending alert cannot consume
+                                   it -- and so a passing check proves CRON
+                                   delivered, not that the check itself did.
 """
 
 from __future__ import annotations
@@ -408,6 +413,17 @@ def deliver(row: sqlite3.Row) -> tuple[bool, bool, str]:
 def main() -> int:
     force_heal = "--heal" in sys.argv[1:]
     verbose = "--verbose" in sys.argv[1:] or "-v" in sys.argv[1:]
+    # --check: report only. Sends nothing, deletes nothing, rebuilds nothing.
+    #
+    # `status` used to call this script with --verbose, which performs a FULL
+    # dispatch -- so the one command whose name promises to be read-only was
+    # delivering due alerts and deleting their rows. Anyone inspecting a
+    # pending test alert consumed it by looking at it, and the delivery it
+    # proved was its own, not cron's.
+    check_only = "--check" in sys.argv[1:]
+    if check_only:
+        force_heal = False
+        verbose = True
     home = DEFAULT_TKLR_HOME
     db_path = home / "tklr.db"
 
@@ -471,7 +487,7 @@ def main() -> int:
         now = datetime.now()
         floor = now - MAX_LATE
 
-        for row in reap_stale_alerts(conn, floor):
+        for row in ([] if check_only else reap_stale_alerts(conn, floor)):
             label = f"{row['record_name']} [{row['alert_name']}]"
             when = row["trigger_datetime"]
             log.error("gave up on %s: due %s, more than %s late", label, when, MAX_LATE)
@@ -483,7 +499,7 @@ def main() -> int:
         due = fetch_due_alerts(conn, now, floor)
 
         sent = 0
-        for row in due:
+        for row in ([] if check_only else due):
             label = f"{row['record_name']} [{row['alert_name']}]"
             delivered, retryable, detail = deliver(row)
 
@@ -507,7 +523,8 @@ def main() -> int:
         # Only now: let tklr materialise rows for triggers still ahead of us.
         # Everything due has already been sent and deleted, so a rebuild has
         # nothing left to destroy.
-        refresh_alerts(home, db_path, force_heal)
+        if not check_only:
+            refresh_alerts(home, db_path, force_heal)
 
         # Silence on success. Speak up only when a human should know.
         if problems:
@@ -517,6 +534,10 @@ def main() -> int:
             # Report positively, including the "nothing was due" case, and say
             # why nothing was due if the workspace simply has no alerts.
             queued = conn.execute("SELECT COUNT(*) FROM Alerts").fetchone()[0]
+            if check_only and due:
+                print(f"tklr alerts: {len(due)} due RIGHT NOW and not yet sent "
+                      f"(--check sent nothing). Cron should deliver within a "
+                      f"minute; if it does not, the cron job is not running.")
             print(
                 f"tklr alerts: {len(due)} due, {sent} sent, "
                 f"{queued} still queued for later today"

@@ -31,15 +31,19 @@ hermes skills install 37Rb/hermes-skills/skills/tklr-reminders --category produc
 
 `--category productivity` files it under `~/.hermes/skills/productivity/`. Leave the flag off and it installs flat at `~/.hermes/skills/tklr-reminders` — the skill works either way, since Hermes only uses the category for grouping.
 
-Then invoke the skill:
+Then run this, exactly as written:
 
-> `/tklr-reminders`
+> `/tklr-reminders setup`
 
-No further wording needed — that loads the skill and it takes it from there: installs tklr, creates the workspace, installs the alert dispatcher, creates the cron job, and asks you the one thing it can't work out on its own, which is which of your channels should receive alerts.
+That loads the skill and it takes it from there: installs tklr, creates the workspace, installs the alert dispatcher, creates the cron job, points alerts at the chat you are already talking in, and sends you a test reminder to confirm delivery works.
 
-**On Matrix and Slack, type `!tklr-reminders` instead.** Those clients reserve `/` for their own commands, so a typed `/` never reaches Hermes; their adapters accept `!` and rewrite it. Every other platform uses `/`.
+**On Matrix and Slack, type `!tklr-reminders setup` instead.** Those clients reserve `/` for their own commands, so a typed `/` never reaches Hermes; their adapters accept `!` and rewrite it. Every other platform uses `/`.
+
+**Include the word `setup` — it does real work.** Anything you type after the command is passed through to the agent as your instruction, and it is placed at the very end of the message, after the skill and after the file listing Hermes appends. That last position is the one the agent acts on most reliably. A bare `/tklr-reminders` gives it a document and no task, and smaller local models tend to respond by describing the skill or offering you a menu instead of setting it up. One word fixes it.
 
 Use the explicit invocation for the first run rather than asking in your own words. Every skill is registered as `/<skill-name>`, and invoking it loads the skill directly — no guessing about whether your phrasing matched. Something like "set up my reminders" relies on the agent picking this skill out of ~65 others from a one-line description, which it may not do, especially if you have used a different calendar tool with it before. Once setup is done, plain language works fine for everyday use.
+
+The same trick helps later on. `/tklr-reminders what can you do?` or `/tklr-reminders add my dentist appointment` both reload the skill *and* give it the task, which is more reliable on a small model than the command alone.
 
 <details>
 <summary>What the installer does</summary>
@@ -104,9 +108,13 @@ The dispatcher reads due alerts, runs each one's command, and deletes the row on
 ```
 SKILL.md                              agent instructions (the skill itself)
 README.md                             this file
+references/setup.md                   the setup procedure, start to finish
+references/using-the-wrapper.md       every command the agent runs day to day
+references/how-it-works.md            delivery, healing, SQLite, troubleshooting
 references/tklr-syntax.md             underlying tklr grammar — only needed for --raw
 scripts/tklr_agent_wrapper.py         the one interface: add list show find free
-                                        done delete move channels status
+                                        done delete move channels status setup
+                                        welcome
 scripts/tklr_alert_poller.py          the every-minute dispatcher
 scripts/set_alert_channel.py          safely edit [alerts]; validates targets
 scripts/tklr_mutate.py                low-level record edits

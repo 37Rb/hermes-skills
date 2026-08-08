@@ -15,7 +15,7 @@ of them so callers never have to:
 Usage
   set_alert_channel.py --list
   set_alert_channel.py --mail-accounts        # himalaya account -> From: address
-  set_alert_channel.py r 'hermes send --to matrix:!room:server --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
+  set_alert_channel.py r 'hermes send --to PLATFORM:TARGET --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
   set_alert_channel.py --remove r
   set_alert_channel.py --home ~/.config/tklr r '<command>'
 
@@ -39,6 +39,11 @@ RESERVED = {"n"}  # built-in: bell + notification popup
 def die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[valid-type]
     print(f"error: {msg}", file=sys.stderr)
     raise SystemExit(code)
+
+
+def warn(msg: str) -> None:
+    """Flag something that will still work but probably isn't what was meant."""
+    print(f"warning: {msg}", file=sys.stderr)
 
 
 def default_home() -> Path:
@@ -221,6 +226,62 @@ def check_mail_headers(command: str) -> None:
         "         printf \"From: account@example.com\\\\nTo: them@example.com\\\\n...\"")
 
 
+# The complete set tklr substitutes. Anything else in braces survives into the
+# delivered message as literal text -- `{message}` reached a user verbatim.
+KNOWN_PLACEHOLDERS = frozenset(
+    {"name", "when", "start", "time", "location", "description"}
+)
+
+# Braces that are part of shell/printf syntax rather than a tklr placeholder.
+_BRACE_RE = re.compile(r"\{([^{}]*)\}")
+
+
+def check_placeholders(command: str) -> None:
+    """Refuse a message template containing a placeholder tklr will not fill.
+
+    Same failure class as an unreachable target, and just as permanent: tklr
+    substitutes only the six names it knows, leaves every other `{...}` alone,
+    and the dispatcher counts the send as a success. A letter written with
+    `{message}` delivered "Test Alert: {message}" to a real user and would have
+    kept doing it for the life of the letter.
+
+    Also warns -- does not refuse -- when the template carries no time at all.
+    An alert that names the event but never says when it starts reads as an
+    assistant announcing an upcoming reminder rather than being one.
+    """
+    unknown = sorted(
+        {
+            m.group(1)
+            for m in _BRACE_RE.finditer(command)
+            # `{}`, `{1}` and `${VAR}`-ish forms are shell, not placeholders
+            if m.group(1).isidentifier()
+            and m.group(1) not in KNOWN_PLACEHOLDERS
+            # `${VAR}` is a shell expansion, not a tklr placeholder
+            and not (m.start() and command[m.start() - 1] == "$")
+        }
+    )
+    if unknown:
+        die("unknown placeholder(s) in the message: "
+            + ", ".join("{%s}" % u for u in unknown) + "\n"
+            "       tklr substitutes only {name}, {when}, {start}, {time},\n"
+            "       {location} and {description}. Anything else is delivered to\n"
+            "       the user as literal text, on every alert, for the life of\n"
+            "       this letter -- and the send still reports success, so it is\n"
+            "       never noticed. Copy a message shape from\n"
+            "       templates/alerts-config-example.toml and change only the\n"
+            "       target.")
+
+    if "{time}" in command:
+        warn("{time} renders minutes as garbage when `ampm = false` "
+             "(\"Sunday at 22 o 4 hours\"). Prefer {start}.")
+
+    if not ({"{when}", "{start}", "{time}"} & set(re.findall(r"\{\w+\}", command))):
+        warn("this message says nothing about when the event starts. Without a "
+             "time it reads as an announcement of an upcoming reminder rather "
+             "than the reminder itself. The shipped shape is "
+             "\"Reminder: {name} - starts {when} ({start})\".")
+
+
 def check_send_target(command: str) -> None:
     """Refuse a `hermes send --to` target that does not exist.
 
@@ -301,7 +362,8 @@ def main() -> int:
     home = Path(args.home).expanduser() if args.home else default_home()
     config = home / "config.toml"
     if not config.exists():
-        die(f"no config at {config} — run install.sh first")
+        die(f"no config at {config}",
+            "Run: tklr_agent_wrapper.py setup --platform <the platform you are on>")
 
     if args.mail_accounts:
         found = mail_accounts()
@@ -355,6 +417,7 @@ def main() -> int:
             "       Use a real delivery command.")
     check_send_target(command)
     check_mail_headers(command)
+    check_placeholders(command)
 
     existing = read_alerts(config)
     verb = "updated" if letter in existing else "added"

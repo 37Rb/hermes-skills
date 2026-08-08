@@ -23,9 +23,13 @@ that performs the delivery:
 
 ```toml
 [alerts]
-r = 'hermes send --to matrix:!room:matrix.org --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
-a = 'hermes send --to telegram:-1001234567890 --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
+r = 'hermes send --to PLATFORM:TARGET_FROM_SEND_LIST --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
+a = 'hermes send --to PLATFORM:OTHER_TARGET --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
 ```
+
+`PLATFORM:TARGET` is a placeholder throughout this file. The real platform is
+**the one this conversation is on** (*The two commands* in `SKILL.md`), and the real
+target is pasted from `hermes send --list`.
 
 tklr substitutes `{name}`, `{when}`, `{start}`, `{time}`, `{location}`, and
 `{description}` before storing the command, so the message wording is config,
@@ -84,16 +88,40 @@ you the day before" — so they can correct it if they want something else.
 
 ## Setting up a person's channels
 
+**For the user you are talking to, this is one command — use it:**
+
+```bash
+python3 $R setup --platform <the platform this conversation is on>
+```
+
+It resolves that platform's target, writes the letter with the correct message
+template, and verifies it round-trips. It refuses and tells you why when it
+cannot decide: unknown platform, no target, or several (pass `--target`).
+*The two commands* in `SKILL.md` covers why the current platform is the answer
+and the `hermes send --list` ordering is not.
+
+**The rest of this section is for the cases `setup` does not cover** — a second
+person, an email letter, a desktop letter, or a group chat. Same principles, done
+by hand.
+
 **You do all of this.** The user's only job is choosing which channels they
 want; discovery, config editing, and verification are yours.
 
 **Step 1 — discover what this machine can reach. Run these yourself:**
 
 ```bash
-hermes send --list                 # chat targets, grouped by platform
+hermes send --list telegram        # the platform you are on — substitute it
+hermes send --list                 # everything else, for the offer in Step 2
 himalaya account list --json       # email accounts; himalaya is how Hermes does email
 command -v notify-send             # desktop notification available?
 ```
+
+**Start with the platform this conversation is on, and default to it** — see
+*The two commands* in `SKILL.md`. The unfiltered list is not a menu ranked by
+suitability: it prints platforms in its own order, and it happily lists one
+whose connection is dead. Reading it top-down is how a user chatting on
+Telegram gets offered Matrix. Use it to learn what *else* exists, which is
+Step 2's offer, not to pick the default.
 
 **Chat and email are two different mechanisms.** `hermes send` covers chat;
 `himalaya` covers email. Never mix them up:
@@ -143,20 +171,23 @@ the alert, and the message reaches nobody. `set_alert_channel.py` now checks
 the target against this list and refuses an unknown one, which is the only
 place the mistake is catchable.
 
-**Step 2 — report findings in plain language and ask only for a choice.** Not
-a wall of output, and no shell commands. Something like:
+**Step 2 — state the default, then report what else is available.** Not a wall
+of output, and no shell commands. Lead with where they already are:
 
-> I can reach three places from here: a direct chat, a group chat called
-> "Household", and email through your configured account. Where would you like
-> your reminders — and is anyone else using this?
+> I'll send your reminders to you here on Telegram. I can also reach a group
+> chat called "Household" and email through your configured account, if you'd
+> like any of those too — and is anyone else using this?
 
-Name the platforms the way `hermes send --list` did — Matrix, Telegram, Signal,
-Discord, Slack, SMS, whatever this machine actually has. Nothing in this skill
-prefers one; the letter's command is just a shell command, so any target
-`hermes send` accepts works identically.
+Name the platforms the way `hermes send --list` did — Telegram, Signal,
+Discord, Slack, Matrix, SMS, whatever this machine actually has. Nothing in
+this skill prefers a particular one; the letter's command is just a shell
+command, so any target `hermes send` accepts works identically. The default
+comes from where the user is talking to you, not from the order of the list.
 
-If exactly one channel exists and only one person is involved, say what you're
-going to do and proceed rather than interrogating them.
+If the current platform has exactly one target and only one person is
+involved, say what you're going to do and proceed rather than interrogating
+them. Ask which target is theirs only when that platform offers several and
+nothing distinguishes them.
 
 **Step 3 — add each letter with the helper script. Do not edit `config.toml`
 by hand and do not write your own TOML code:**
@@ -164,7 +195,7 @@ by hand and do not write your own TOML code:**
 ```bash
 S=~/.hermes/skills/productivity/tklr-reminders/scripts/set_alert_channel.py
 
-python3 $S r 'hermes send --to matrix:!PASTE_FROM_SEND_LIST:matrix.org --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
+python3 $S r 'hermes send --to PLATFORM:PASTE_FROM_SEND_LIST --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
 python3 $S e 'sh -c "printf \"From: ACCOUNT_ADDRESS\\nTo: THEIR_ADDRESS\\nSubject: Reminder: {name} - starts {when} ({start})\\n\\n{name}\\nWhen: {start} ({when})\\n{description}\\n\" | himalaya message send"'
 python3 $S --list          # show what is configured
 python3 $S --remove r      # delete a letter
@@ -192,6 +223,15 @@ inventing syntax. The email one is the least forgiving: it nests a `printf` insi
 `sh -c` inside a TOML single-quoted string, so copy it and change only the two
 addresses.
 
+**Change the target, never the message text.** The only substitutions tklr
+makes are `{name}`, `{when}`, `{start}`, `{time}`, `{location}` and
+`{description}` — anything else you invent, like `{message}` or `{subject}`,
+is sent to the user *literally* and stays broken for the life of the letter.
+The wording above also exists as written for a reason: without the word
+`Reminder` and a verb before the time, an alert reads as you *announcing* an
+upcoming reminder rather than being one. `set_alert_channel.py` rejects unknown
+placeholders, but it cannot restore meaning you removed.
+
 **Step 4 —** the script has already verified the letter parses, so go straight
 to *Proving it works* for the end-to-end check.
 
@@ -199,6 +239,13 @@ Only come back to the user to confirm it's done — or to ask whether the test
 alert actually arrived, which is the one thing you cannot check.
 
 ## First-run setup
+
+**Do not run `install.sh` as your first step.** `python3 $R setup --platform
+<platform>` runs it for you and then does everything it leaves undone. Running
+the installer alone produces a machine with tklr present, no alert channel, and
+no dispatcher scheduled — which reports healthy and delivers nothing. The rest
+of this section is background on what the installer does and how to read its
+failures, not a step to perform.
 
 ```bash
 bash ~/.hermes/skills/productivity/tklr-reminders/scripts/install.sh
@@ -366,71 +413,20 @@ Rules for this:
 
 ## Closing out setup
 
-When it works, tell the user **what they can now do** — an overview of the
-capability, in their language, with examples of things they can actually say.
-Nothing about how it was built: no command cheat sheet, no list of steps you
-performed, no tool names. They asked for an assistant; a summary full of `tklr`
-invocations tells them the assistant does not exist.
+```bash
+python3 $R welcome
+```
 
-Cover the whole surface, because they cannot ask for what they don't know
-exists. Adapt it to what you actually configured — only promise email if an
-email letter exists, only mention other people if they're set up:
+Send that output verbatim. It is built from the letters actually configured, so
+it promises only what exists.
 
-> You're all set — just talk to me normally about anything time-related.
->
-> **Appointments and events.** "Dentist Friday at 3 for an hour." "Coffee with
-> Sam tomorrow at 11:30." All-day things work too — "Jordan's birthday on
-> August 15th" — as do repeating ones: "standup every weekday at 9",
-> "1:1 with Dana every other Tuesday", "pay the mortgage on the 1st of each
-> month". I can note a location, and hold travel time either side of a meeting.
->
-> **Things to do.** "Remind me to buy milk" for something with no fixed time,
-> or with a deadline and a priority: "renew my passport by September 1st, it's
-> important — start warning me a month out." Bigger jobs can have steps I track
-> together — "plan the Colorado trip: flights, hotel, dog sitter" — and I can
-> keep habits honest too: "I want to exercise three times a week."
->
-> **Asking me things.** "What's on my calendar today?" "What about tomorrow?"
-> "How's my week looking?" "What do I need to get done?" "When's my next
-> dentist appointment?" "Am I free Tuesday at 3 for a coffee date?" — for that
-> last one I'll check what's around it, not just the slot itself.
->
-> **How you get reminded.** Alerts reach you on [name the channels you actually
-> configured — whatever `hermes send --list` offered, plus email or desktop if you
-> set those up. Never say "Matrix" unless that is what this machine uses]. You can
-> have several per event at different times — "remind me a day before and again an
-> hour before" — and I'll pick sensible ones if you don't say. [If more than one
-> person is configured:] Jordan gets hers on [her channel], and a shared event can
-> alert you both.
->
-> **Changing and finishing things.** "I've done that" marks a task complete.
-> "Cancel Friday's meeting", "move the dentist to Thursday afternoon", "skip
-> next week's standup but keep the rest" all work too. To change any other
-> detail I'll replace the entry and tell you that's what I did.
->
-> I've added a test reminder that should reach you in about a minute — tell me
-> whether it arrives, since that's the one part I can't check myself.
-
-Keep it scannable and concrete. The point is that a user who reads it knows the
-range of what they can say next; a user who reads "you can use plain language
-to add reminders" has learned nothing.
-
-Bad — every line here is a mistake:
-
-> * Installed the tklr tool via pipx (version 1.043)
-> * How to use: `tklr add "* Dentist @s tomorrow 3p @a 1d, 1h: r"`
-
-* It names the implementation, which the user should never need to know.
-* It states the installer *wrongly* — this skill installs with uv, never pipx —
-  and mangles the version. Don't narrate mechanics you'd have to get right;
-  just leave them out.
-* Worst, it teaches a command that **does not work**: `tomorrow 3p` is rejected
-  by tklr. Handing over commands means handing over the traps.
-
-Never give the user tklr syntax, even when they ask how it works — describe the
-capability in plain words instead. If they explicitly want the underlying tool,
-say what it is and point at `references/tklr-syntax.md`; do not improvise
-examples.
+Do not write your own. The user needs to know **what they can now say** — not
+how it was built, not a command cheat sheet, not the steps you performed, not
+the tool names. They asked for an assistant; a summary full of `tklr`
+invocations tells them the assistant does not exist, and every hand-written
+attempt in this skill's history has produced exactly that. *How to talk about
+this skill* in `SKILL.md` has the reasoning and the test to apply if you are
+tempted anyway.
 
 ## Optional: a daily briefing
 
@@ -447,7 +443,7 @@ about the others:
 
 ```bash
 hermes cron create '37 6 * * *' --skill tklr-reminders \
-  --name tklr-briefing-alex --deliver 'matrix:!room:server' \
+  --name tklr-briefing-alex --deliver 'PLATFORM:TARGET_FROM_SEND_LIST' \
   "Summarise Alex's day: run python3 ~/.hermes/skills/productivity/tklr-reminders/scripts/tklr_agent_wrapper.py list --today, keep only rows in Alex's bin, and write a short friendly summary. Mention conflicts and overdue tasks. If the day is empty and nothing is overdue, output nothing."
 ```
 

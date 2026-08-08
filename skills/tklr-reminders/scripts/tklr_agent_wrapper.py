@@ -22,6 +22,8 @@ Every operation is a subcommand. Run `--help` on any of them for its flags:
     free      what is around a time        done      mark a task complete
     delete    remove one or an occurrence  move      reschedule an occurrence
     channels  list/configure alert routes  status    is it all set up
+    setup     build the whole delivery     welcome   what to tell the user
+              path for one platform                  (send its output as-is)
 
 Typical use:
 
@@ -89,6 +91,10 @@ warnings: list[str] = []
 
 
 def die(msg: str, *extra: str, code: int = 1) -> "NoReturn":  # type: ignore[valid-type]
+    # Flush first: progress goes to stdout and errors to stderr, and a reader
+    # that merges the two streams otherwise sees the error before the steps
+    # that led to it.
+    sys.stdout.flush()
     print(f"error: {msg}", file=sys.stderr)
     for line in extra:
         print(f"  {line}", file=sys.stderr)
@@ -272,7 +278,8 @@ def run_tklr(home: Path, *args: str) -> subprocess.CompletedProcess[str]:
                               capture_output=True, text=True, timeout=120)
     except FileNotFoundError:
         die("tklr is not installed or not on PATH",
-            "Run: bash scripts/install.sh")
+            "Run: tklr_agent_wrapper.py setup --platform <the platform you are on>",
+            "(it installs tklr and everything else in one command)")
     except subprocess.SubprocessError as exc:
         die(f"tklr failed to run: {exc}")
 
@@ -628,14 +635,402 @@ def cmd_channels(args, home: Path, now: datetime) -> int:
     return delegate("set_alert_channel.py", ["--list"], home)
 
 
+ALERT_TEMPLATE = ('--quiet "⏰ Reminder: {name} — starts {when} ({start}). '
+                  '{description}"')
+
+
+_send_list_cache: dict[str | None, str] = {}
+
+
+def send_list(platform: str | None = None) -> str:
+    """`hermes send --list`, optionally filtered to one platform.
+
+    Cached per process: `setup` consults it three times and each call is a
+    subprocess with a 60s timeout.
+    """
+    if platform in _send_list_cache:
+        return _send_list_cache[platform]
+    cmd = ["hermes", "send", "--list"] + ([platform] if platform else [])
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        die(f"could not run `{' '.join(cmd)}`: {exc}")
+    if proc.returncode != 0:
+        die(f"`{' '.join(cmd)}` failed", (proc.stderr or "").strip())
+    _send_list_cache[platform] = proc.stdout or ""
+    return _send_list_cache[platform]
+
+
+def platform_targets(platform: str) -> list[str]:
+    """Every `platform:id` target `hermes send --list` reports for a platform."""
+    out = send_list(platform)
+    seen, targets = set(), []
+    for match in re.findall(rf"\b{re.escape(platform)}:\S+", out):
+        target = match.rstrip(".,")
+        if target not in seen:
+            seen.add(target)
+            targets.append(target)
+    return targets
+
+
+CRON_JOB_NAME = "tklr-alert-poller"
+POLLER = Path.home() / ".hermes" / "scripts" / "tklr_alert_poller.py"
+
+
+def run_installer(home: Path) -> None:
+    """Run install.sh and report it in one line, or die with its full output.
+
+    Folded in so the whole setup is ONE tool call. It used to be a separate
+    step, and separate steps are where this gets lost: a run on 2026-08-07
+    called install.sh, received 5,356 characters back -- 28 lines of uv package
+    names, then a block of instructions -- narrated "let me check a few things",
+    emitted no further tool call, and the turn simply ended. Nothing was
+    configured. One command cannot be abandoned halfway.
+    """
+    script = SKILL_SCRIPTS / "install.sh"
+    if not script.is_file():
+        die(f"install.sh is missing from {SKILL_SCRIPTS}")
+    try:
+        proc = subprocess.run(["bash", str(script), "--home", str(home)],
+                              capture_output=True, text=True, timeout=900)
+    except (OSError, subprocess.SubprocessError) as exc:
+        die(f"could not run install.sh: {exc}")
+
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0:
+        print(out, file=sys.stderr)
+        die("install.sh failed — see its output above.",
+            "tklr itself is not usable, so nothing further will work.")
+
+    version = ""
+    for line in out.splitlines():
+        if "installed —" in line or "already installed —" in line:
+            version = line.split("—", 1)[1].strip()
+    print(f"tklr: ready{f' ({version})' if version else ''}")
+
+
+def cron_job_present() -> bool | None:
+    """True/False if `hermes cron list` could be read, None if it could not."""
+    try:
+        proc = subprocess.run(["hermes", "cron", "list"], capture_output=True,
+                              text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return CRON_JOB_NAME in (proc.stdout or "")
+
+
+def ensure_dispatcher() -> bool:
+    """Copy the poller into ~/.hermes/scripts/, where cron can reach it.
+
+    The scheduler refuses any script path outside that directory -- absolute
+    paths, `../` and symlinks are all rejected -- so the skill's own copy can
+    never be scheduled directly.
+    """
+    source = SKILL_SCRIPTS / "tklr_alert_poller.py"
+    if not source.is_file():
+        return False
+    try:
+        POLLER.parent.mkdir(parents=True, exist_ok=True)
+        if not POLLER.exists() or POLLER.read_bytes() != source.read_bytes():
+            shutil.copy2(source, POLLER)
+            POLLER.chmod(0o755)
+        return True
+    except OSError:
+        return False
+
+
+def ensure_cron_job() -> tuple[bool, str]:
+    """Create the every-minute dispatcher job if it is missing.
+
+    Folded into `setup` rather than left as an instruction because it is the
+    one step with no visible symptom when skipped: letters validate, reminders
+    save, `add` reports the alert is scheduled -- and nothing is ever
+    delivered, because nothing is running to deliver it. Every setup that has
+    silently produced no alerts got this far and no further.
+    """
+    if not ensure_dispatcher():
+        return False, f"could not install the dispatcher into {POLLER.parent}"
+
+    present = cron_job_present()
+    if present is None:
+        return False, ("could not read `hermes cron list` -- create the job by "
+                       "hand and confirm it, or nothing will ever be delivered")
+    if present:
+        return True, f"cron job '{CRON_JOB_NAME}' already present"
+
+    # --script takes the BARE FILENAME: the scheduler resolves it inside
+    # ~/.hermes/scripts/ and rejects anything that escapes that directory.
+    try:
+        proc = subprocess.run(
+            ["hermes", "cron", "create", "* * * * *",
+             "--script", "tklr_alert_poller.py", "--no-agent",
+             "--name", CRON_JOB_NAME, "--deliver", "local"],
+            capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"could not run `hermes cron create`: {exc}"
+    if proc.returncode != 0:
+        return False, f"`hermes cron create` failed: {(proc.stderr or '').strip()}"
+
+    if cron_job_present():
+        return True, f"created cron job '{CRON_JOB_NAME}' — dispatching every minute"
+    return False, ("`hermes cron create` reported success but the job is not in "
+                   "`hermes cron list`")
+
+
+def cmd_setup(args, home: Path, now: datetime) -> int:
+    """Configure one platform as an alert channel, start to finish.
+
+    The agent knows exactly one thing for certain about delivery: which
+    platform the user is talking to it on. This turns that one fact into a
+    working channel without asking the user anything, which is the point --
+    every version of this flow that asked "where would you like reminders?"
+    ended up proposing a dead platform that happened to sort first in
+    `hermes send --list`.
+    """
+    platform = args.platform.strip().lower().rstrip(":")
+    if not platform:
+        die("--platform needs a name, e.g. --platform telegram", code=2)
+
+    known = {p.lower() for p in re.findall(r"^\s*([A-Za-z][\w-]*):\s*$",
+                                           send_list(), re.M)}
+    known |= {t.split(":", 1)[0].lower()
+              for t in re.findall(r"\b\w+:\S+", send_list())}
+    if known and platform not in known:
+        die(f"'{platform}' is not a messaging platform on this machine.",
+            f"configured platforms: {', '.join(sorted(known))}",
+            "pass the platform this conversation is on.")
+
+    if args.target:
+        target = args.target
+    else:
+        targets = platform_targets(platform)
+        if not targets:
+            die(f"'{platform}' has no targets in `hermes send --list`.",
+                "it may be configured but not connected. Ask the user which",
+                "channel to use instead, or pass --target explicitly.")
+        if len(targets) > 1:
+            die(f"'{platform}' has {len(targets)} targets — pick one and pass "
+                "it as --target:",
+                *(f"  {t}" for t in targets))
+        target = targets[0]
+
+    # Only now, once the destination is known to be valid: a typo in --platform
+    # should not trigger a package install before it is reported.
+    run_installer(home)
+
+    command = f"hermes send --to {target} {ALERT_TEMPLATE}"
+    rc = delegate("set_alert_channel.py", [args.letter, command], home)
+    if rc != 0:
+        return rc
+    print(f"\nalert channel '{args.letter}' delivers to {target}.")
+
+    ok, note = ensure_cron_job()
+    print(f"dispatcher: {note}")
+    if not ok:
+        die("the channel is configured but NOTHING WILL BE DELIVERED.",
+            "A reminder will save, validate, and report its alert as scheduled;",
+            "no alert will ever arrive, because no job is running to send it.",
+            "Fix the dispatcher before telling the user anything works.")
+
+    if args.no_test:
+        print("\n(--no-test: skipped the delivery test. Nothing has proven that "
+              "an alert\ncan actually reach the user.)")
+        return 0
+
+    rc = create_test_alert(args.letter, home, now)
+    if rc != 0:
+        die("the channel and cron job are configured, but the delivery test "
+            "could not be created.",
+            "Do not tell the user setup is complete — nothing has proven an "
+            "alert can reach them.")
+    print("Tell the user where their reminders will arrive — do not ask them.")
+    return 0
+
+
+def create_test_alert(letter: str, home: Path, _now: datetime) -> int:
+    """Create a reminder whose alert fires in a little over two minutes.
+
+    Setup's own proof of delivery, created here rather than left as an
+    instruction because it is the step that gets skipped -- and skipping it is
+    invisible, since every other part of the chain reports healthy while
+    sending nothing. It also takes the agent out of the verification loop
+    entirely: the alert arrives on the user's device whether or not the agent
+    remembers to mention it.
+
+    The trigger is computed from a whole minute boundary, not from now: tklr
+    stores times to the minute, so an unrounded `now + 2m` truncates to as
+    little as 1m01s away and `check_alert_margin` refuses it outright.
+
+    The boundary is taken from now + SPAWN_SLACK rather than from now. The
+    margin is re-checked by the `add` SUBPROCESS, milliseconds later, against
+    its own clock -- so anchoring on `now` exactly gives a worst case of
+    exactly MIN_ALERT_MARGIN (when now lands on a minute boundary), which any
+    spawn delay at all pushes under. The slack makes the trigger 2:05-3:05
+    away, always clear of the 2:00 floor.
+
+    The clock is re-read here rather than taken from the caller: `setup` runs
+    the installer and `hermes cron` first, each with a long timeout, so the
+    timestamp from program start can be minutes stale by the time we arrive.
+    """
+    offset_min = 2
+    SPAWN_SLACK = timedelta(seconds=5)
+    now = datetime.now()
+    anchor = now + SPAWN_SLACK
+    next_minute = anchor.replace(second=0, microsecond=0)
+    if anchor != next_minute:                    # already on the boundary? keep it
+        next_minute += timedelta(minutes=1)
+    fires = next_minute + timedelta(minutes=offset_min)
+    start = fires + timedelta(minutes=offset_min)
+
+    print(f"\ndelivery test: alert fires {fires:%H:%M} "
+          f"(in {human(fires - now)}), delivered within a minute of that.")
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--home", str(home),
+         "add", "--type", "event", "--subject", "tklr delivery test",
+         "--when", f"{start:%Y-%m-%d %H:%M}", "--duration", "5m",
+         "--alert", f"{offset_min}m", "--via", letter],
+        capture_output=True, text=True)
+    for line in (proc.stdout or "").splitlines():
+        print(f"  {line}")
+    for line in (proc.stderr or "").splitlines():
+        print(f"  {line}", file=sys.stderr)
+    if proc.returncode != 0:
+        return proc.returncode
+
+    print("\nNow WAIT for it to arrive, then ask the user whether it did.")
+    print("That is the only proof this works, and the one thing you cannot "
+          "check yourself.")
+    return 0
+
+
+def describe_channels(letters: dict[str, str]) -> list[str]:
+    """Plain-English destinations, derived from the configured letters.
+
+    `welcome` promises only what exists. A blurb that offers email on a
+    workspace with no email letter is a promise the skill cannot keep.
+    """
+    out: list[str] = []
+    for letter in sorted(letters):
+        command = letters[letter]
+        target = re.search(r"--to\s+[\"']?(\S+?)[\"']?(?:\s|$)", command)
+        if "himalaya" in command:
+            addr = re.search(r"To:\s*([^\s\\\"]+@[^\s\\\"]+)", command)
+            out.append(f"email{f' at {addr.group(1)}' if addr else ''}")
+        elif "notify-send" in command:
+            out.append("a desktop notification on this machine")
+        elif target:
+            platform = target.group(1).split(":", 1)[0]
+            out.append(f"{platform.capitalize()}")
+        else:
+            # A letter whose command is none of the three known shapes -- a
+            # custom script, say. Still a real destination; describe it
+            # vaguely rather than dropping it, because dropping every letter
+            # leaves nothing to promise and used to crash on channels[0].
+            out.append("the channel you set up")
+    seen, unique = set(), []
+    for item in out:
+        if item.lower() not in seen:
+            seen.add(item.lower())
+            unique.append(item)
+    return unique
+
+
+WELCOME = """\
+You're all set — just talk to me normally about anything time-related.
+
+**Appointments and events.** "Dentist Friday at 3 for an hour." "Coffee with
+Sam tomorrow at 11:30." All-day things work too — "{who}'s birthday on August
+15th" — as do repeating ones: "standup every weekday at 9", "1:1 with Dana
+every other Tuesday", "pay the mortgage on the 1st of each month". I can note a
+location, and hold travel time either side of a meeting.
+
+**Things to do.** "Remind me to buy milk" for something with no fixed time, or
+with a deadline and a priority: "renew my passport by September 1st, it's
+important — start warning me a month out." Bigger jobs can have steps I track
+together — "plan the Colorado trip: flights, hotel, dog sitter" — and I can
+keep habits honest too: "I want to exercise three times a week."
+
+**Asking me things.** "What's on my calendar today?" "What about tomorrow?"
+"How's my week looking?" "What do I need to get done?" "When's my next dentist
+appointment?" "Am I free Tuesday at 3 for a coffee date?" — for that last one
+I'll check what's around it, not just the slot itself.
+
+**How you get reminded.** Alerts reach you on {channels}. You can have several
+per event at different times — "remind me a day before and again an hour
+before" — and I'll pick sensible ones if you don't say.
+
+**Changing and finishing things.** "I've done that" marks a task complete.
+"Cancel Friday's meeting", "move the dentist to Thursday afternoon", "skip next
+week's standup but keep the rest" all work too. To change any other detail I'll
+replace the entry and tell you that's what I did.
+"""
+
+TEST_LINE = ("\nI've added a test reminder that should reach you shortly — tell "
+             "me whether it arrives, since that's the one part I can't check "
+             "myself.\n")
+
+
+def cmd_welcome(args, home: Path, now: datetime) -> int:
+    """Print the user-facing description of this skill, ready to send as-is.
+
+    This exists because the description is the single thing the agent gets
+    wrong most reliably. Asked to explain the skill, a model reaches for the
+    nearest example in its context -- which is a wrapper invocation -- and
+    hands the user a command cheat sheet, teaching them the traps the wrapper
+    exists to hide. Generated text cannot be trusted here, so it is not
+    generated: it is printed, and the agent's only job is to relay it.
+    """
+    letters = configured_letters(home)
+    if not letters:
+        die("no alert channels are configured, so there is nothing to promise.",
+            "run `setup --platform <the platform you are on>` first.")
+    channels = describe_channels(letters)
+    if len(channels) > 1:
+        channels_text = ", ".join(channels[:-1]) + f" and {channels[-1]}"
+    else:
+        channels_text = channels[0]
+    text = WELCOME.format(who=args.who or "Jordan", channels=channels_text)
+    if not args.no_test:
+        text += TEST_LINE
+    # Re-wrap per paragraph: the channel list is variable-length, so the
+    # template's own line breaks land wherever. Chat clients re-wrap anyway;
+    # this keeps the plain-text form readable when they don't.
+    import textwrap
+    print("\n\n".join(
+        textwrap.fill(" ".join(para.split()), width=78)
+        for para in text.strip().split("\n\n")))
+    return 0
+
+
 def cmd_status(args, home: Path, now: datetime) -> int:
     print(f"workspace: {home}")
     letters = configured_letters(home)
     print(f"channels:  {', '.join(sorted(letters)) if letters else 'NONE — alerts cannot be created'}")
-    poller = Path.home() / ".hermes" / "scripts" / "tklr_alert_poller.py"
-    print(f"dispatcher: {'installed' if poller.exists() else 'MISSING — run install.sh'}")
-    if poller.exists():
-        proc = subprocess.run([sys.executable, str(poller), "--verbose"],
+    poller = POLLER
+    source = SKILL_SCRIPTS / "tklr_alert_poller.py"
+    # Drift matters more than it looks. The deployed copy is what cron runs, and
+    # an older one silently ignores flags it does not know -- a `--check` sent to
+    # a pre-`--check` poller performs a FULL DISPATCH, so the read-only status
+    # command would send and delete the very alert being inspected.
+    stale = (poller.exists() and source.is_file()
+             and poller.read_bytes() != source.read_bytes())
+    print(f"dispatcher: {'installed' if poller.exists() else 'MISSING — run setup'}"
+          + (" — OUT OF DATE vs the skill; run setup to refresh" if stale else ""))
+    # The cron job is the only part of the chain with no symptom when absent:
+    # everything else reports healthy and no alert is ever sent.
+    cron = cron_job_present()
+    print("cron job:  " + {
+        True: f"'{CRON_JOB_NAME}' scheduled",
+        False: f"MISSING — NOTHING WILL BE DELIVERED. Run: setup --platform <platform>",
+        None: "could not read `hermes cron list` — verify by hand",
+    }[cron])
+    if poller.exists() and stale:
+        print("  (not running it: an out-of-date poller ignores --check and would")
+        print("   dispatch for real, sending and deleting any alert now due)")
+    elif poller.exists():
+        proc = subprocess.run([sys.executable, str(poller), "--check"],
                               capture_output=True, text=True,
                               env=dict(os.environ, TKLR_HOME=str(home)), timeout=180)
         for line in (proc.stdout or "").splitlines():
@@ -908,10 +1303,34 @@ def main() -> int:
     st = sub.add_parser("status", help="is everything set up and working")
     st.set_defaults(fn=cmd_status)
 
+    su = sub.add_parser(
+        "setup",
+        help="configure the platform you are talking on as an alert channel")
+    su.add_argument("--platform", required=True,
+                    help="the platform THIS conversation is on, e.g. telegram")
+    su.add_argument("--letter", default="r", help="channel letter (default r)")
+    su.add_argument("--target",
+                    help="only if the platform has more than one target")
+    su.add_argument("--no-test", action="store_true",
+                    help="skip the delivery test (leaves delivery unproven)")
+    su.set_defaults(fn=cmd_setup)
+
+    w = sub.add_parser(
+        "welcome",
+        help="print what to tell the user this does — send its output verbatim")
+    w.add_argument("--who", help="another person's name, for the examples")
+    w.add_argument("--no-test", action="store_true",
+                   help="omit the closing test-reminder line")
+    w.set_defaults(fn=cmd_welcome)
+
     args = ap.parse_args()
     home = tklr_home(args.home)
-    if not (home / "tklr.db").exists():
-        die(f"no workspace at {home}", "Run: bash scripts/install.sh")
+    # `setup` is the command that CREATES the workspace, so it cannot require
+    # one. Everything else does — operating on a missing workspace produces
+    # confusing tklr errors rather than an obvious one.
+    if args.cmd != "setup" and not (home / "tklr.db").exists():
+        die(f"no workspace at {home}",
+            "Run: tklr_agent_wrapper.py setup --platform <the platform you are on>")
     return args.fn(args, home, datetime.now())
 
 

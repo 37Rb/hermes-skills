@@ -89,7 +89,10 @@ else
     # and download one only if none qualifies. --python overrides it.
     PYSPEC="${TKLR_PYTHON:->=3.12}"
     echo "  installing tklr-dgraham (python $PYSPEC) ..."
-    if ! "$UV" tool install --python "$PYSPEC" tklr-dgraham; then
+    # --quiet: uv otherwise lists all 28 resolved packages. That output is
+    # noise to a human and actively harmful to an agent, which has to read it
+    # before deciding what to do next -- see run_installer() in the wrapper.
+    if ! "$UV" tool install --quiet --python "$PYSPEC" tklr-dgraham; then
         warn "uv could not install tklr."
         warn "If pip reported 'Could not find a version that satisfies the"
         warn "requirement tklr-dgraham', that is a Python version mismatch, NOT a"
@@ -155,62 +158,31 @@ fi
 
 # ----------------------------------------------------------------- summary
 step "next steps"
-if [[ -n "$LETTERS" ]]; then
-    echo "  Confirm the dispatcher cron job exists:"
-    echo "    hermes cron list | grep tklr-alert-poller"
-    echo "  If it is missing:"
-    echo "    hermes cron create '* * * * *' \\"
-    echo "      --script tklr_alert_poller.py --no-agent \\"
-    echo "      --name tklr-alert-poller --deliver local"
-    echo
-    echo "  Create reminders with the wrapper, never by hand:"
-    echo "    python3 $SKILL_DIR/scripts/tklr_agent_wrapper.py --home $TKLR_HOME \\"
-    echo "      --type event --subject \"...\" --when \"tomorrow 3pm\" \\"
-    echo "      --for <person> --alert 1h --via <letter>"
-else
-    cat <<EOF
-  FOR THE AGENT — do these yourself. Do not paste them to the user; they are
-  your steps, not theirs. Ask the user only which channels they want.
+# Deliberately NOT a procedure. This block used to spell out the whole setup as
+# numbered steps, and on 2026-08-07 an agent ran install.sh first, read them,
+# and followed steps 2/3/5 verbatim -- copying the letter `a` and the sample
+# message text character for character -- instead of the one command that does
+# all of it. A complete ordered recipe will always beat a single instruction
+# elsewhere, so the recipe is gone. `setup` runs this script itself; nothing
+# below needs doing by hand.
+cat <<EOF
+  FOR THE AGENT — do NOT continue by hand from here. This script only installs
+  tklr and the workspace; it configures no channel and schedules no delivery.
 
-  1. Discover what this machine can reach — run both:
-       hermes send --list            (chat targets)
-       himalaya account list --json  (email accounts; himalaya is how email works)
-     For an email letter you also need the account's own address for From: --
-     get it with:  set_alert_channel.py --mail-accounts
-     (never read ~/.config/himalaya/config.toml yourself; it holds credentials)
-  2. Tell the user in plain language what you found, and ask where they want
-     reminders sent, and whether anyone else uses this.
-  3. Add one lowercase letter per (person, channel) USING THE HELPER. Do not
-     edit config.toml by hand and do not write your own TOML code — the
-     section exists but holds only comments, and an apostrophe in a command
-     silently erases it two tklr runs later. The helper handles both and
-     verifies the result:
-       python3 $SKILL_DIR/scripts/set_alert_channel.py --home $TKLR_HOME \\
-         r 'hermes send --to matrix:!room:server --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
-       python3 $SKILL_DIR/scripts/set_alert_channel.py --home $TKLR_HOME --list
-     Copy command shapes from:
-       $SKILL_DIR/templates/alerts-config-example.toml
-  4. (The helper already verified the letter parses.)
-  5. Create the every-minute dispatcher. Copy this exactly:
-       hermes cron create '* * * * *' \\
-         --script tklr_alert_poller.py --no-agent \\
-         --name tklr-alert-poller --deliver local
-     --script takes the BARE FILENAME. It resolves inside ~/.hermes/scripts/,
-     and the scheduler REJECTS any path outside that directory — so passing
-     the skill's own copy by absolute path fails with
-     "Blocked: script path resolves outside the scripts directory".
-     Then confirm:  hermes cron list | grep -A6 tklr-alert-poller
-  6. Create reminders with the wrapper — NEVER by hand-writing tklr syntax:
-       python3 $SKILL_DIR/scripts/tklr_agent_wrapper.py --home $TKLR_HOME \\
-         --type event --subject "Alert plumbing test" \\
-         --when "in 6 minutes" --for <person> --alert 5m --via <letter>
-     It resolves dates ("tomorrow 3pm"), assembles the tokens, validates,
-     checks the result is not a draft, and heals. Hand-written entries fail
-     silently.
-  7. Follow "Proving it works" in SKILL.md, then ask the user whether the
-     test alert actually arrived.
+  Run this one command. It is idempotent, it calls this script for you, and it
+  does everything that is left — alert channel, dispatcher, cron job, and a
+  test alert that proves delivery works:
+
+    python3 $SKILL_DIR/scripts/tklr_agent_wrapper.py --home $TKLR_HOME \\
+      setup --platform <the platform this conversation is on>
+
+  Then wait for the test alert to arrive and ask the user whether it did.
+  Report what it can now do with:
+
+    python3 $SKILL_DIR/scripts/tklr_agent_wrapper.py --home $TKLR_HOME welcome
+
+  and send that output verbatim. Never show the user a wrapper command.
 EOF
-fi
 echo
 echo "tklr home: $TKLR_HOME"
 echo "log:       $LOG_DIR/tklr-alerts.log"

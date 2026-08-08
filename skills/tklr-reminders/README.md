@@ -150,7 +150,7 @@ Agent:  4 hours logged. Billing 2h, all Henderson. Exercise 2h, split
 
 Capture first, fill in the detail afterwards: that two-step is the whole point of a jot, and what separates it from a note. A note is information you file because you'll want it later; a jot is a record that at 13:14 this happened. Categories nest, so `exercise.walking` and `exercise.interval_training` total together under `exercise` without mixing into your billing hours.
 
-Behind the scenes is [tklr](https://github.com/dagraham/tklr-dgraham). You don't need to learn its syntax. Just talk to your agent in natural language and let it use the tool.
+Behind the scenes is [tklr](https://github.com/dagraham/tklr-dgraham) ([documentation](https://dagraham.github.io/tklr-dgraham/)). You don't need to learn its syntax. Just talk to your agent in natural language and let it use the tool.
 
 You can learn it if you want to, though. The skill sits alongside ordinary tklr use rather than replacing it. It uses tklr's normal workspace at `~/.config/tklr`, so you and the agent share one database: anything you add with `tklr` or its UI shows up for the agent, and anything the agent adds shows up for you. [`references/tklr-syntax.md`](references/tklr-syntax.md) documents the grammar.
 

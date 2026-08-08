@@ -8,7 +8,7 @@ Each directory under `skills/` is a self-contained skill with its own `SKILL.md`
 
 | Skill | What it does |
 |---|---|
-| [tklr-reminders](skills/tklr-reminders) | Personal schedule assistant — appointments, events, tasks, and reminders in plain language, with alerts delivered to your own chat and email channels. Backed by [tklr](https://github.com/dagraham/tklr-dgraham). |
+| [tklr-reminders](skills/tklr-reminders) | Personal schedule assistant — appointments, events, tasks, and reminders in plain language, with alerts delivered to your own chat and email channels. Backed by [tklr](https://github.com/dagraham/tklr-dgraham) ([documentation](https://dagraham.github.io/tklr-dgraham/)). |
 
 ## Installing
 

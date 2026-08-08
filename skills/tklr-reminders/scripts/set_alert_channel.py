@@ -308,8 +308,8 @@ def check_send_target(command: str) -> None:
 
     available = re.findall(r"\b\w+:\S+", listed.stdout)
     # Platform names come from the `platform:id` targets and from the section
-    # headings `--list` groups them under ("Matrix:"), so a platform configured
-    # with only a home channel is still recognised.
+    # headings `--list` groups them under, so a platform configured with only a
+    # home channel is still recognised.
     platforms = {c.split(":", 1)[0].lower() for c in available}
     platforms |= {s.lower() for s in re.findall(r"^\s*([A-Za-z][\w-]*):\s*$",
                                                 listed.stdout, re.M)}

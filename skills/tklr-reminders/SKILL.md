@@ -59,6 +59,7 @@ python3 $R setup --platform <the platform this conversation is on>
 python3 $R welcome
 ```
 
+
 **`setup --platform` decides where alerts go.** You already know the platform:
 your own instructions name it — "You are on a text messaging communication
 platform, Telegram", "You are chatting inside the Hermes desktop app". Read it
@@ -103,9 +104,12 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    — setting it up now" is the whole preamble.
 
    Ask only what you genuinely cannot determine, and only once: who else uses
-   this, their email addresses, and any choice `setup` explicitly reported it
-   could not make. Never ask which channel a new reminder should use — pick a
-   sensible default from the configured letters and say what you chose.
+   this, and any choice `setup` explicitly reported it could not make. Never ask
+   which channel a new reminder should use — pick a sensible default from the
+   configured letters and say what you chose.
+
+   An email address you already have is *determined*, not unknown — see
+   `--email` in *Do this now*.
 2. **The person in front of you is whoever is talking, not whoever your memory
    describes.** Long-term memory sits in your system prompt on every turn and
    will name other people, projects and interests. That is background about a
@@ -125,7 +129,7 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    the name is not.
 3. **Everything goes through `$R`. Never call `tklr` yourself.** Subcommands:
    `add`, `list`, `show`, `find`, `free`, `done`, `delete`, `move`, `channels`,
-   `status`, `setup`, `welcome`. `python3 $R --help` lists them.
+   `status`, `setup`, `email`, `welcome`. `python3 $R --help` lists them.
 
    Calling `tklr` directly is how every silent failure in this skill has
    happened: a missing itemtype character becomes a draft, `tomorrow 3p` is
@@ -166,7 +170,7 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
 | file | what it is |
 |---|---|
 | `scripts/tklr_agent_wrapper.py` | `$R` — the one interface for every operation |
-| `scripts/install.sh` | idempotent setup + readiness check |
+| `scripts/install.sh` | installs tklr; `setup` runs it for you — never call it yourself |
 | `scripts/set_alert_channel.py` | the only safe way to write `[alerts]` letters |
 | `scripts/tklr_alert_poller.py` | the every-minute alert dispatcher |
 | `scripts/tklr_mutate.py` | low-level record edits |
@@ -185,6 +189,11 @@ file that stops being mentioned here stops being shipped.
 
 **Run `python3 $R welcome` and send its output.** That is the rule. The rest of
 this section is why, for when you are tempted.
+
+The same applies mid-setup: `setup`, `email` and `channels --set` each end with a
+`SEND EXACTLY THIS TO THE USER` block. Send it. A run that had just configured
+email perfectly signed off by teaching the user a tklr command that does not even
+parse — invented in the one gap where nothing had told it what to say.
 
 **The hard test: your reply to the user contains no commands.** Before sending
 anything that describes this skill, scan it. If it contains `python3`, `tklr`,
@@ -225,24 +234,16 @@ improvise examples.
 ## Setup: check first, then load the guide
 
 **Before anything else in a session that touches alerts, confirm setup is
-complete.** The installer is idempotent, so it is also the readiness check, and
-it never sends anything:
+complete:**
 
 ```bash
-bash ~/.hermes/skills/productivity/tklr-reminders/scripts/install.sh
-hermes cron list | grep tklr-alert-poller
+python3 $R status
 ```
 
-Setup is complete only when **all four** hold:
-
-| | must be true |
-|---|---|
-| tklr | `install.sh` reports `ok: already installed` or installs it |
-| workspace | `ok: config.toml present` and `ok: tklr.db present` |
-| channels | `ok: letters defined: …` — **not** `no channel letters defined yet` |
-| cron job | `hermes cron list` shows `tklr-alert-poller` |
-
-Missing channels is what `setup --platform` fixes. For anything else, **load
+It reports the workspace, the channel letters, the dispatcher and the cron job,
+and sends nothing. Anything it prints in capitals is broken; no workspace at all
+means nothing is set up yet. Either way the repair is `setup --platform`, which
+is idempotent — run it rather than diagnosing. For anything else, **load
 `references/setup.md` and follow it.** Do not improvise setup from this file —
 the procedure is deliberately not here, because getting it wrong produces a
 system that looks configured and silently delivers nothing.
@@ -291,6 +292,10 @@ not `install.sh` — this:
 
 ```bash
 python3 $R setup --platform <the platform this conversation is on>
+
+# Do you already know their email address — from your memory, or from
+# earlier in this conversation? Then add it to that same command:
+python3 $R setup --platform <platform> --email <their address>
 ```
 
 It does the whole job in one call: installs tklr, creates the workspace,
@@ -299,7 +304,8 @@ cron job, and creates a test reminder whose alert fires about three minutes
 later. It is idempotent, so run it even if you think setup is already done.
 
 The platform is the one this conversation is on — your own instructions name
-it. Do not ask the user, and do not pick from `hermes send --list`.
+it. Do not ask the user, and do not pick from `hermes send --list`. Never guess
+an address either — leave `--email` off and the offer asks for it.
 
 **Do not split this into steps.** Every failed setup in this skill's history
 ran one command, narrated what it was about to do next, and then stopped —
@@ -309,30 +315,35 @@ exits 0, everything above is done and there is nothing left to verify by hand.
 
 Then, and only then:
 
-1. **Wait for the test alert to arrive, then ask the user whether it did.**
-   `setup` already created it — do not create another. This is the only proof
-   the system works, and the one thing you cannot check yourself. **Do not tell
-   the user setup is complete until they confirm an alert reached them.**
-2. **Once they confirm it arrived, offer the routes that still have no letter.**
-   One working channel is a working setup, not a finished one — and the user
-   cannot ask for a channel they don't know you can reach. Check what else
-   exists and offer it by name:
+1. **Send the `SEND EXACTLY THIS TO THE USER` block `setup` ends with, and
+   nothing else.** It already asks about the test alert and offers the channels
+   that have no letter yet — the two things this moment is for. `setup` created
+   the test alert; do not create another, and **do not tell the user setup is
+   complete until they confirm one reached them.**
+
+   Every command that ends in a message prints one of these blocks. Everything
+   above the line is working notes, yours and not theirs.
+2. **Add whatever they accept.** Email is the usual second channel and has its
+   own command, because its delivery command is the one that is easy to get
+   wrong:
 
    ```bash
-   himalaya account list --json     # email — the usual second channel
-   hermes send --list               # other chats, group chats
-   command -v notify-send           # desktop notification on this machine
+   python3 $R email --to <where they read mail>
    ```
 
-   "I can also send these to your email, or to the Household group chat — want
-   either?" Add whatever they accept before step 3; `references/setup.md` has
-   the email command, which is the one that is easy to get wrong.
+   It reads the `From:` address from himalaya, writes the letter, tests it, and
+   ends with the block to send. `--to` is where they *read* mail — never the
+   sending address, never a guess; the offer already asked for it, or you passed
+   `--email` and they confirmed it. With no himalaya account the block says email
+   is supported and needs one; send that rather than dropping it. Other routes
+   are added with the `channels --set` command printed beside each one.
 3. `welcome --no-test` prints what to tell the user, built from the channels
    that now exist — so it must run **last**, after any channel added in step 2.
-   **Send its output verbatim.** Do not write your own summary, and do not show
-   the user any command from this file — everything above is yours to run, not
-   theirs to type. (Use plain `welcome`, without `--no-test`, only if you have
-   not already confirmed delivery in step 1.)
+   **Send its output verbatim.** It is the answer to "how do I use this", and
+   the only one: a reminder is something they *say* to you, so a reply that
+   shows them a command to type has misdescribed the whole skill. (Use plain
+   `welcome`, without `--no-test`, only if you have not already confirmed
+   delivery in step 1.)
 
 If the user asked for something else — a reminder, a question about their week —
 do that instead, and load `references/using-the-wrapper.md` first for the flags.

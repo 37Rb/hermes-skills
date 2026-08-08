@@ -100,9 +100,41 @@ cannot decide: unknown platform, no target, or several (pass `--target`).
 *The two commands* in `SKILL.md` covers why the current platform is the answer
 and the `hermes send --list` ordering is not.
 
-**The rest of this section is for the cases `setup` does not cover** — a second
-person, an email letter, a desktop letter, or a group chat. Same principles, done
-by hand.
+**Email is the second command, and the only other one with a shortcut:**
+
+```bash
+python3 $R email --to <the address they read mail at>
+```
+
+It finds the himalaya account, uses its address as the mandatory `From:`,
+generates the delivery command (the one shape that is easy to get wrong),
+verifies the letter, and runs a delivery test. Add `--letter b` for a second
+person, `--from` only when himalaya has several accounts.
+
+`--to` is the address they *read* mail at. It is not discoverable from this
+machine and it is usually not the account's own address, so it has to come from
+you or from them:
+
+* **You already know it** — memory, or earlier in this conversation. Pass it to
+  `setup --email <address>` (or `status --email`, `channels --email`) and the
+  offer names it: "I can also send them to your email at alex@example.com …
+  tell me if that is not where you read mail." Offered for confirmation, never
+  assumed — a remembered address can be stale or belong to someone else in the
+  household.
+* **You don't** — the offer asks, and the reply that accepts email carries the
+  address, so no round trip is wasted.
+
+Either way, never default to the sending address and never invent one.
+
+When himalaya has no account at all, `email` refuses and the offer block replaces
+the offer with a plain statement: the skill supports email through himalaya, no
+account is set up here, and one can be added whenever they like. That sentence is
+not optional politeness — an unmentioned capability is one the user can never ask
+for. What it must not become is an improvised `hermes send --to email:…`, which
+is a separate and usually unconfigured mechanism.
+
+**The rest of this section is for the cases neither command covers** — a second
+person's chat, a desktop letter, or a group chat. Same principles, done by hand.
 
 **You do all of this.** The user's only job is choosing which channels they
 want; discovery, config editing, and verification are yours.
@@ -219,9 +251,11 @@ added 'r' and verified it:
 
 Copy command shapes from `templates/alerts-config-example.toml` — chat via
 `hermes send`, email via `himalaya`, desktop via `notify-send` — rather than
-inventing syntax. The email one is the least forgiving: it nests a `printf` inside
-`sh -c` inside a TOML single-quoted string, so copy it and change only the two
-addresses.
+inventing syntax. **Do not hand-write the email one at all**: it nests a `printf`
+inside `sh -c` inside a TOML single-quoted string, each layer eating one level of
+escaping, and `python3 $R email --to <address>` generates it correctly. The `$S e`
+line above is what that command produces, shown so the shape is recognisable — not
+a thing to type.
 
 **Change the target, never the message text.** The only substitutions tklr
 makes are `{name}`, `{when}`, `{start}`, `{time}`, `{location}` and
@@ -378,14 +412,18 @@ almost always an undefined `@a` letter or a draft, not a dispatcher fault.
 
 ## Offer the channels they are not using yet
 
-Once delivery is proven on the first channel, **go back over what Step 1 found and
-offer every route that has no letter yet.** One configured channel is a working
-setup, not a finished one, and the user cannot ask for a channel they don't know
-you can reach. Alerts are the whole point of the skill; a reminder that only lands
-somewhere they aren't looking is the failure this exists to prevent.
+One configured channel is a working setup, not a finished one, and the user cannot
+ask for a channel they don't know you can reach. Alerts are the whole point of the
+skill; a reminder that only lands somewhere they aren't looking is the failure this
+exists to prevent.
 
-Compare the discovered routes against the letters now in `[alerts]`
-(`python3 $R channels`) and offer the difference by name:
+**You do not have to discover this, or word it.** `setup` and `status` both end
+with `Other channels this machine can reach`, listing every route with no letter
+yet — the himalaya account and its address, a reachable group chat, a desktop
+notification — each with the command that adds it. Routes already configured are
+omitted, so anything printed is genuinely an open offer. `setup`, `email` and
+`channels --set` then print the offer as a sentence, inside a `SEND EXACTLY THIS
+TO THE USER` block; send that block as your whole reply. It reads like this:
 
 > That's working now — reminders will reach you on \<configured channel>. I can
 > also send them to your email, or pop a desktop notification on this machine.
@@ -394,9 +432,6 @@ Compare the discovered routes against the letters now in `[alerts]`
 
 Rules for this:
 
-* **Offer concretely, never generically.** "Email through \<address>" or "a desktop
-  notification here", not "other channels are available". Name what you actually
-  found.
 * **Ask once, then stop.** If they decline, don't raise it again this session —
   but do treat "not yet" as different from "no": record it as available so a later
   "actually, add email too" needs no rediscovery.
@@ -408,8 +443,13 @@ Rules for this:
   add the new letter to anything important rather than silently leaving it
   chat-only.
 * Same verification bar as the first channel: a new letter is not working until an
-  alert has actually been delivered through it. Don't announce a channel you have
-  not tested.
+  alert has actually been delivered through it. `email` and `channels --set` both
+  create that test themselves, so the block they print says a test has been sent —
+  which is true only if you let them run it. `--no-test` makes it say otherwise.
+* **The reply is the block, and only the block.** The turn after a channel is
+  added is where this skill's oldest failure resurfaces: nothing is left to say,
+  so a tklr command gets invented to fill the space. Everything the user needs is
+  in the block; everything else on screen is yours.
 
 ## Closing out setup
 

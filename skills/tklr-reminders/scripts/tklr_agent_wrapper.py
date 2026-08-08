@@ -22,8 +22,9 @@ Every operation is a subcommand. Run `--help` on any of them for its flags:
     free      what is around a time        done      mark a task complete
     delete    remove one or an occurrence  move      reschedule an occurrence
     channels  list/configure alert routes  status    is it all set up
-    setup     build the whole delivery     welcome   what to tell the user
-              path for one platform                  (send its output as-is)
+    setup     build the whole delivery     email     add email as a channel
+              path for one platform                  (himalaya)
+    welcome   what to tell the user (send its output as-is)
 
 Typical use:
 
@@ -65,8 +66,10 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import tomllib
 from datetime import date, datetime, timedelta
+from typing import NamedTuple
 from pathlib import Path
 
 ITEMTYPE = {
@@ -629,7 +632,24 @@ def cmd_channels(args, home: Path, now: datetime) -> int:
     if args.set:
         if len(args.set) != 2:
             die("--set takes a letter and a command", code=2)
-        return delegate("set_alert_channel.py", args.set, home)
+        letter, command = args.set
+        rc = delegate("set_alert_channel.py", args.set, home)
+        if rc != 0:
+            return rc
+        # A letter that validates is not a letter that delivers, and the two
+        # look identical from here. Same bar as the first channel: nothing is
+        # announced until an alert has gone down it.
+        if args.no_test:
+            print("\n(--no-test: nothing has proven an alert can be delivered "
+                  "on this letter.)")
+        elif create_test_alert(letter, home, now) != 0:
+            die("the letter is configured but the delivery test could not be "
+                "created.",
+                "Do not announce this channel — nothing has proven it delivers.")
+        described = describe_channels({letter: command})
+        print_added_relay(home, described[0] if described else "the new channel",
+                          tested=not args.no_test, known_email=args.email)
+        return 0
     if args.remove:
         return delegate("set_alert_channel.py", ["--remove", args.remove], home)
     return delegate("set_alert_channel.py", ["--list"], home)
@@ -837,6 +857,9 @@ def cmd_setup(args, home: Path, now: datetime) -> int:
     if args.no_test:
         print("\n(--no-test: skipped the delivery test. Nothing has proven that "
               "an alert\ncan actually reach the user.)")
+        routes = print_routes(home, args.email)
+        print_relay(f"Your reminders will arrive on {channels_phrase(home)}.",
+                    offer_sentence(routes), email_unavailable(home))
         return 0
 
     rc = create_test_alert(args.letter, home, now)
@@ -845,7 +868,17 @@ def cmd_setup(args, home: Path, now: datetime) -> int:
             "could not be created.",
             "Do not tell the user setup is complete — nothing has proven an "
             "alert can reach them.")
-    print("Tell the user where their reminders will arrive — do not ask them.")
+    routes = print_routes(home, args.email)
+    # Opens like a reply, deliberately. A block that starts mid-thought invites
+    # a preamble, and the preamble is where "setup is complete!" gets announced
+    # -- two lines above the sentence asking whether the test alert arrived.
+    # Nothing to prepend if the first line is already an opening.
+    print_relay(
+        f"All set up bar one thing: your reminders will arrive on "
+        f"{channels_phrase(home)}, and I have just sent a test one. Tell me "
+        "when it turns up, since whether it actually reaches you is the one "
+        "thing I cannot check from here.",
+        offer_sentence(routes), email_unavailable(home))
     return 0
 
 
@@ -903,6 +936,387 @@ def create_test_alert(letter: str, home: Path, _now: datetime) -> int:
     print("That is the only proof this works, and the one thing you cannot "
           "check yourself.")
     return 0
+
+
+SELF = Path(__file__).resolve()
+
+
+def mail_accounts(home: Path) -> list[tuple[str, str]]:
+    """[(himalaya account name, its From: address)], or [] if email is not set up.
+
+    Delegated to set_alert_channel.py rather than reimplemented: himalaya's
+    config is a plaintext-password file in a common setup, and exactly one
+    place in this skill should be reading it.
+    """
+    key = str(home)
+    if key in _mail_cache:
+        return _mail_cache[key]
+    _mail_cache[key] = _read_mail_accounts(home)
+    return _mail_cache[key]
+
+
+_mail_cache: dict[str, list[tuple[str, str]]] = {}
+
+
+def _read_mail_accounts(home: Path) -> list[tuple[str, str]]:
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(SKILL_SCRIPTS / "set_alert_channel.py"),
+             "--home", str(home), "--mail-accounts"],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    out = []
+    for line in (proc.stdout or "").splitlines():
+        if "\t" in line:
+            name, addr = line.split("\t", 1)
+            out.append((name.strip(), addr.strip()))
+    return out
+
+
+CHAT_TEMPLATE = ("hermes send --to %s " + ALERT_TEMPLATE)
+DESKTOP_COMMAND = ('notify-send "⏰ Reminder: {name}" '
+                   '"starts {when} ({start}). {description}"')
+
+
+class Route(NamedTuple):
+    """A delivery route with no letter yet."""
+    label: str    # what it is, for the agent
+    command: str  # how to add it, for the agent
+    offer: str    # what to call it when offering, for the user
+    ask: str = ""  # anything the offer must ask for to be actionable
+
+
+def email_unavailable(home: Path) -> str:
+    """Why email is not on offer, in words for the user — "" if it is on offer.
+
+    Absence needs saying. himalaya being unconfigured is not a reason to stay
+    quiet about email: the user cannot ask for a channel they don't know the
+    skill supports, and "no email account on this machine" is a thing they can
+    act on, unlike silence. Only genuine absence -- if an email letter already
+    exists, or accounts exist to offer, this is empty.
+    """
+    letters = configured_letters(home)
+    if any("himalaya" in c for c in letters.values()) or mail_accounts(home):
+        return ""
+    return ("I can send reminders by email too, but that goes through himalaya "
+            "and there is no email account set up on this machine yet. Set one "
+            "up whenever you like and I can use it.")
+
+
+def discover_routes(home: Path, known_email: str | None = None) -> list[Route]:
+    """Every delivery route with no letter yet, and how to add and offer it.
+
+    `offer` is the one field the user ever sees. A route has to be describable
+    in a sentence a person can answer -- "your email", "the Household group
+    chat" -- or the offer is not an offer.
+
+    This is discovery the agent will not do on its own. "Once the first channel
+    works, check what else exists and offer it" has been an instruction in
+    SKILL.md and in references/setup.md for several revisions, and a run on
+    2026-08-08 still finished setup, announced success, and never so much as
+    looked for himalaya -- because by then `setup` had reported success and
+    there was nothing left in front of it. An agent does not go looking for a
+    channel it has no evidence of. So the evidence is printed here, in the
+    output of the one command it definitely runs, with the address filled in.
+
+    Only routes that are genuinely absent are listed: a workspace that already
+    has an email letter should produce no email line, or the offer becomes
+    noise that gets ignored on the run where it matters.
+    """
+    letters = configured_letters(home)
+    commands = " ".join(letters.values())
+    free = [c for c in "abcdefghijklmopqrstuvwxyz" if c not in letters]
+    routes: list[Route] = []
+
+    if "himalaya" not in commands:
+        for name, addr in mail_accounts(home):
+            # The destination address is the one thing this script cannot work
+            # out and the agent often can -- from memory, or from earlier in the
+            # conversation. Passed in, it becomes a confirmable offer; absent, a
+            # question inside the offer, so either way the reply that accepts
+            # email carries an address and no round trip is wasted. `{addr}` is
+            # where mail is sent FROM and is usually not where it is read, so it
+            # is never the default.
+            routes.append(Route(
+                f"email — himalaya account '{name}', sending from {addr}",
+                f"python3 {SELF} email --to "
+                + (known_email or "<the address they READ mail at>"),
+                f"your email at {known_email}" if known_email else "your email",
+                # A remembered address is a claim, not a fact: it can be stale,
+                # or belong to someone else in the household. Offered, never
+                # assumed.
+                f"Tell me if {known_email} is not where you read mail."
+                if known_email else
+                "For email, tell me which address to send to."))
+            break  # one offer is an offer; the rest is a menu
+
+    # notify-send being installed is not the question -- whether anyone would
+    # see the popup is. With no display this machine is a server, and a desktop
+    # notification is a channel that reports success and shows nobody anything.
+    if ("notify-send" not in commands and shutil.which("notify-send")
+            and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))):
+        routes.append(Route(
+            "a desktop notification on this machine",
+            f"python3 {SELF} channels --set {free[0] if free else '<letter>'} "
+            f"'{DESKTOP_COMMAND}'",
+            "a desktop notification on this machine"))
+
+    try:
+        listed = send_list()
+    except SystemExit:
+        listed = ""
+    # An offer must not name a destination the user already has. Two targets on
+    # one platform are one destination to them: with a named room configured,
+    # offering that platform contradicts the sentence just above it.
+    already = {d.lower() for d in describe_channels(letters)}
+    for target, label, offer in chat_targets(listed):
+        if (target in commands or offer.lower() in already
+                or any(label == r.label for r in routes)):
+            continue
+        letter = free[len(routes)] if len(free) > len(routes) else "<letter>"
+        routes.append(Route(label, f"python3 {SELF} channels --set {letter} "
+                                   f"'{CHAT_TEMPLATE % target}'", offer))
+    return routes
+
+
+# A `--list` entry: leading whitespace, `platform:id`, anything else on the
+# line, and an optional trailing `(kind)` annotation.
+CHAT_LINE = re.compile(r"^\s+(\w+:\S+).*?(?:\((\w+)\)\s*)?$")
+
+# An id a person would recognise reads like a name: it starts with a letter and
+# continues with letters, digits, spaces, `_`, `-` or `.`. Everything else --
+# room ids, phone numbers, numeric group ids, user handles -- is an internal
+# identifier whatever platform produced it. This deliberately knows nothing
+# about any particular service: the skill supports whatever `hermes send`
+# supports, including platforms that did not exist when this was written, so
+# there is no list of sigils to keep current.
+READABLE_ID = re.compile(r"^[A-Za-z][\w .-]*$")
+
+# `--list` annotations that mean one-to-one rather than a shared destination.
+# English words it prints, not platforms: anything else is treated as a named
+# room and offered by that name.
+DIRECT_KINDS = {"dm", "chat", "direct", "private"}
+
+
+def chat_targets(listed: str) -> list[tuple[str, str, str]]:
+    """[(target, label, how to offer it)] from `hermes send --list`.
+
+    The label matters as much as the target. An offer the user cannot evaluate
+    is not an offer, and a raw room id or phone number is exactly that -- so an
+    opaque target is described by its platform and kind, and only a
+    human-readable id is quoted. Identical labels collapse: two direct-message
+    targets on one platform are a single offer to name that platform.
+
+    Everything here is derived from `--list` itself. The platform name, the
+    kind and the id all come from its output; nothing is special-cased.
+    """
+    out: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for line in listed.splitlines():
+        m = CHAT_LINE.match(line)
+        if not m:
+            continue
+        target, kind = m.group(1), (m.group(2) or "chat")
+        platform, _, ident = target.partition(":")
+        name = platform.capitalize()
+        readable = bool(READABLE_ID.match(ident))
+        label = f"{name} {kind}: {ident}" if readable else f"{name} {kind}"
+        # The kind is `--list`'s own annotation, not a platform trait. A named
+        # shared destination is offered by its name whatever the annotation
+        # calls it -- group, channel, room; a one-to-one one by its platform.
+        if not readable:
+            offer = name
+        elif kind in DIRECT_KINDS:
+            offer = f"{name} ({ident})"
+        elif kind == "group":
+            offer = f"the {ident} group chat"
+        else:
+            offer = f"the {ident} {kind}"
+        if label in seen:
+            continue
+        seen.add(label)
+        out.append((target, label, offer))
+    return out
+
+
+def print_routes(home: Path, known_email: str | None = None) -> list[Route]:
+    """Print the unconfigured routes, or say plainly that there are none."""
+    routes = discover_routes(home, known_email)
+    missing_email = email_unavailable(home)
+    print("\nOther channels this machine can reach, none of them configured yet:")
+    if not routes and not missing_email:
+        print("  none — every route found is already an alert letter.")
+    for route in routes:
+        print(f"  · {route.label}")
+        if route.command:
+            print(f"      {route.command}")
+        if route.offer == "your email" and not known_email:
+            print("      (already know their address — from memory, or from")
+            print("       earlier in this conversation? re-run with --email <it>")
+            print("       and the offer names it for confirmation instead of")
+            print("       asking. Never guess one.)")
+    if missing_email:
+        print("  · email — SUPPORTED but not available: himalaya has no account")
+        print("      configured on this machine. Not something you can add, and")
+        print("      not something to stay quiet about: the closing block says")
+        print("      email exists and needs an account. Do not improvise another")
+        print("      email route — `hermes send --to email:…` is a different,")
+        print("      usually unconfigured mechanism, not a fallback.")
+    return routes
+
+
+def offer_sentence(routes: list[Route]) -> str:
+    """The offer, in words a person can answer. Empty when there is nothing left.
+
+    One channel is a working setup, not a finished one, and the user cannot ask
+    for a channel they do not know you can reach.
+    """
+    names = [r.offer for r in routes if r.offer]
+    if not names:
+        return ""
+    if len(names) == 1:
+        sentence = f"I can also send them to {names[0]} — want that as well?"
+    else:
+        listed = ", ".join(names[:-1]) + f" or {names[-1]}"
+        sentence = (f"I can also send them to {listed} — want any of those as "
+                    "well? Some people like a second channel for the things "
+                    "they really cannot miss.")
+    asks = " ".join(r.ask for r in routes if r.ask and r.offer)
+    return f"{sentence} {asks}".strip()
+
+
+def channels_phrase(home: Path) -> str:
+    """"your chat and email at alex@example.com" — the configured destinations."""
+    described = describe_channels(configured_letters(home))
+    if not described:
+        return "no channel yet"
+    if len(described) == 1:
+        return described[0]
+    return ", ".join(described[:-1]) + f" and {described[-1]}"
+
+
+RELAY_RULE = (
+    "Nothing above the line is for the user. If what you send contains "
+    "`tklr`,\n`python3`, a `--flag`, an `@` token or a code fence, you have "
+    "written the wrong\nthing: they never type a command. They talk to you, and "
+    "you compose it. When\nthey ask how to use this, the answer comes from "
+    "`welcome`, not from you.")
+
+
+def print_relay(*paragraphs: str) -> None:
+    """Print the exact words to send the user, and say that they are exact.
+
+    Every point where the agent composes a user-facing message by itself is a
+    point where it hands over a command instead -- not from ignoring a rule, but
+    because the nearest example in its context is always an invocation. A run on
+    2026-08-08 configured email flawlessly and then closed with
+    `tklr add "Dentist @s tomorrow 3p @e 15m,60m: a,e"`: a command the user must
+    never type, in a syntax that does not exist. `welcome` fixed this for the end
+    of setup by printing the text rather than describing it. This is the same
+    move for every other moment that ends in a message.
+    """
+    rule = "-" * 72
+    print(f"\n{rule}\nSEND EXACTLY THIS TO THE USER AS YOUR WHOLE REPLY —\n"
+          f"no sentence before it, none after it:\n{rule}")
+    for para in paragraphs:
+        if para:
+            print(textwrap.fill(" ".join(para.split()), width=72) + "\n")
+    print(f"{rule}\n{RELAY_RULE}")
+
+
+def himalaya_command(from_addr: str, to_addr: str) -> str:
+    """Build the email delivery command — the one shape that is easy to get wrong.
+
+    It nests a printf inside `sh -c` inside a TOML literal string, and each
+    layer eats one level of escaping: the `\\\\n` written here survives TOML
+    verbatim, becomes `\\n` after the dispatcher's shlex.split, and is finally
+    interpreted by printf. Hand-written versions of this have shipped without a
+    `From:` header (himalaya then exits 1 on every alert, forever) and with the
+    newlines collapsed. Generating it removes the whole class of mistake.
+    """
+    lines = [
+        f"From: {from_addr}",
+        f"To: {to_addr}",
+        "Subject: Reminder: {name} - starts {when} ({start})",
+        "",
+        "{name}",
+        "When: {start} ({when})",
+        "{description}",
+        "",
+    ]
+    body = "\\\\n".join(lines)
+    return f'sh -c "printf \\"{body}\\" | himalaya message send"'
+
+
+ADDR_RE = re.compile(r"^[^@\s,]+@[^@\s,]+\.[^@\s,]+$")
+
+
+def cmd_email(args, home: Path, now: datetime) -> int:
+    """Add an email alert letter, end to end, including the delivery test."""
+    to_addr = args.to.strip()
+    if not ADDR_RE.match(to_addr):
+        die(f"'{to_addr}' does not look like an email address",
+            "--to is where the person READS mail, which is usually not the",
+            "himalaya account's own address. Ask them; do not assume.")
+
+    accounts = mail_accounts(home)
+    if args.from_addr:
+        from_addr = args.from_addr.strip()
+    elif not accounts:
+        die("himalaya has no email accounts configured, so email is not "
+            "available on this machine.",
+            "Say that plainly rather than improvising another route --",
+            "`hermes send --to email:...` is a different, usually unconfigured",
+            "mechanism, not a fallback.")
+    elif len(accounts) > 1:
+        die(f"himalaya has {len(accounts)} accounts — say which one sends, "
+            "with --from:",
+            *(f"  --from {addr}   ({name})" for name, addr in accounts))
+    else:
+        from_addr = accounts[0][1]
+
+    if not ADDR_RE.match(from_addr):
+        die(f"'{from_addr}' does not look like an email address",
+            "--from must be the himalaya account's OWN address: himalaya takes",
+            "the envelope sender from the `From:` header and has no default.")
+
+    rc = delegate("set_alert_channel.py",
+                  [args.letter, himalaya_command(from_addr, to_addr)], home)
+    if rc != 0:
+        return rc
+    print(f"\nalert channel '{args.letter}' emails {to_addr} (from {from_addr}).")
+
+    if args.no_test:
+        print("\n(--no-test: nothing has proven mail can actually be delivered "
+              "on this letter.)")
+        print_added_relay(home, "email", tested=False)
+        return 0
+    rc = create_test_alert(args.letter, home, now)
+    if rc != 0:
+        die("the email letter is configured but the delivery test could not be "
+            "created.",
+            "Do not tell the user email is working — nothing has proven it.")
+    print_added_relay(home, "email", tested=True)
+    return 0
+
+
+def print_added_relay(home: Path, added: str, tested: bool,
+                      known_email: str | None = None) -> None:
+    """Close out "channel added" with the words to send, and what is still open.
+
+    The turn after a channel is added is the one that went wrong on 2026-08-08:
+    email was configured correctly and the reply taught the user a tklr command.
+    Nothing was left for the agent to say, so it invented something.
+    """
+    routes = print_routes(home, known_email)
+    test = (f" I have sent a test to {added}; tell me when it arrives, since "
+            "that is the one thing I cannot check from here." if tested else "")
+    print_relay(f"Done — your reminders will now reach you on "
+                f"{channels_phrase(home)}.{test}",
+                offer_sentence(routes), email_unavailable(home))
 
 
 def describe_channels(letters: dict[str, str]) -> list[str]:
@@ -1035,6 +1449,15 @@ def cmd_status(args, home: Path, now: datetime) -> int:
                               env=dict(os.environ, TKLR_HOME=str(home)), timeout=180)
         for line in (proc.stdout or "").splitlines():
             print(f"  {line}")
+    # A workspace set up before this existed has a working chat letter, no
+    # email letter, and nobody who ever mentioned email was possible. `status`
+    # is where that gets noticed on any later run.
+    if letters:
+        routes = print_routes(home, args.email)
+        say = " ".join(x for x in (offer_sentence(routes),
+                                   email_unavailable(home)) if x)
+        if say:
+            print(f"\nWorth saying next time you speak to the user:\n  \"{say}\"")
     return 0
 
 
@@ -1161,6 +1584,11 @@ def verify_scheduled(home: Path, record_id: int, entry: str, resolved: str | Non
     elif wanted_alert:
         print("  verified: on the schedule; alert is beyond tklr's generation "
               "horizon and will be created closer to the time")
+
+
+EMAIL_HELP = ("their email address, if you already know it — from memory or "
+              "from earlier in this conversation. The channel offer then names "
+              "it for confirmation instead of asking for it. Never guess one.")
 
 
 def main() -> int:
@@ -1298,9 +1726,14 @@ def main() -> int:
 
     c = sub.add_parser("channels", help="list or configure alert channels")
     c.add_argument("--set", nargs=2, metavar=("LETTER", "COMMAND"))
-    c.add_argument("--remove", metavar="LETTER"); c.set_defaults(fn=cmd_channels)
+    c.add_argument("--remove", metavar="LETTER")
+    c.add_argument("--no-test", action="store_true",
+                   help="with --set: skip the delivery test (leaves it unproven)")
+    c.add_argument("--email", help=EMAIL_HELP)
+    c.set_defaults(fn=cmd_channels)
 
     st = sub.add_parser("status", help="is everything set up and working")
+    st.add_argument("--email", help=EMAIL_HELP)
     st.set_defaults(fn=cmd_status)
 
     su = sub.add_parser(
@@ -1313,7 +1746,30 @@ def main() -> int:
                     help="only if the platform has more than one target")
     su.add_argument("--no-test", action="store_true",
                     help="skip the delivery test (leaves delivery unproven)")
+    su.add_argument("--email", help=EMAIL_HELP)
     su.set_defaults(fn=cmd_setup)
+
+    em = sub.add_parser(
+        "email", help="add an email alert channel (himalaya)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Add email as an alert channel and prove it delivers.\n"
+            "\n"
+            "The `From:` address is the himalaya account's own — himalaya takes\n"
+            "the envelope sender from that header and has no default, so this\n"
+            "reads it for you. `--to` is where the person actually READS mail,\n"
+            "which is usually a different address: ask them, do not assume."),
+        epilog=("examples:\n"
+                "  %(prog)s --to alex@example.com\n"
+                "  %(prog)s --to alex@example.com --letter b   second person\n"))
+    em.add_argument("--to", required=True,
+                    help="where they read mail (ask them; not the account address)")
+    em.add_argument("--letter", default="e", help="channel letter (default e)")
+    em.add_argument("--from", dest="from_addr",
+                    help="sending address; only needed if himalaya has several accounts")
+    em.add_argument("--no-test", action="store_true",
+                    help="skip the delivery test (leaves delivery unproven)")
+    em.set_defaults(fn=cmd_email)
 
     w = sub.add_parser(
         "welcome",
@@ -1324,6 +1780,12 @@ def main() -> int:
     w.set_defaults(fn=cmd_welcome)
 
     args = ap.parse_args()
+    # A malformed --email would reach the user inside an offer, so it is checked
+    # here rather than at the point it is printed.
+    if getattr(args, "email", None) and not ADDR_RE.match(args.email.strip()):
+        die(f"--email {args.email!r} does not look like an email address",
+            "Pass an address you actually know, or leave it off and the offer",
+            "will ask the user for one. Never guess.")
     home = tklr_home(args.home)
     # `setup` is the command that CREATES the workspace, so it cannot require
     # one. Everything else does — operating on a missing workspace produces

@@ -278,7 +278,7 @@ underneath and is documented further down for reading, not for calling.
 | "I've done that" (a task) | `$R done <id>` |
 | "Cancel Friday's meeting" | find the id, confirm which one, `$R delete <id>` |
 | "Move the dentist to Thursday at 2" | `$R edit <id> --when 'thursday 2pm'` — moves the whole reminder, and needs no lookup |
-| "Move just next Monday's standup to Tuesday" | `$R move <id> --instance '<that occurrence>' --to 'tuesday 9am'` — one occurrence of a **repeating** reminder only |
+| "Move just next Monday's standup to Tuesday" | `$R move <id> --instance '<that occurrence>' --to 'tuesday 9am'` — one occurrence of a **repeating** reminder only. It becomes a separate reminder; say so if the user would notice |
 | "Also send it to my email" | `$R edit <id> --via r,e` |
 | "Make it an hour instead of 30 minutes" | `$R edit <id> --duration 1h` |
 | "Call it 'Dentist checkup' instead" | `$R edit <id> --subject 'Dentist checkup'` |
@@ -355,12 +355,25 @@ is what you call:
 | move one occurrence | `$R move <id> --instance '<current>' --to '<new>'` |
 | change any other detail | `$R edit <id> --<field> <value>` |
 
+**Moving one occurrence splits it off into its own reminder.** That is
+deliberate. On tklr 1.0.43 a recurring record that stores a moved occurrence
+generates **no occurrences at all** — the entire series disappears from the
+schedule while `details` still prints a correct-looking rruleset and every
+command reports success. Measured: twelve occurrences before the move, zero
+after. So `move` excludes the old date from the series, which works, and creates
+the moved one as a separate dated reminder carrying the original's duration,
+alerts, people and details. Two records is the cost; the alternative is a
+reminder that silently stops existing. Tell the user it is now separate only if
+they would notice — they asked to move one thing, and it moved.
+
+`status` also reports any reminder already in that state, since tklr's own
+reschedule and its UI both produce it without the skill involved.
+
 **Call `$R`, not `$M`.** The shim takes no natural-language datetimes and has
 none of the guards: `$R` resolves "tomorrow 2pm" before tklr ever sees it,
 refuses an empty `--instance` instead of silently deleting the whole series, and
-sends a `move` on a non-recurring reminder down a path that works instead of one
-that duplicates it. Reaching past the wrapper is how a reminder ended up on the
-schedule at two different times.
+never writes the token that empties a schedule. Reaching past the wrapper is how
+a reminder ended up on the schedule at two different times.
 
 **Why a script here.** These operations exist in tklr but have **no CLI
 surface** — `add` and `finish` are the only mutations the command line offers.

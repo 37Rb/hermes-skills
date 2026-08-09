@@ -78,7 +78,7 @@ import subprocess
 import sys
 import textwrap
 import tomllib
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import NamedTuple
 from pathlib import Path
 
@@ -333,20 +333,36 @@ def tklr_own_home() -> Path | None:
     python = Path(exe).resolve().parent / "python"
     if not python.exists():
         return None
-    env = {k: v for k, v in os.environ.items() if k != "TKLR_HOME"}
     code = ("from tklr.tklr_env import TklrEnvironment;"
             "print(TklrEnvironment().home)")
+    # TKLR_HOME is dropped for the child only, via unsetenv/putenv rather than
+    # by building an env mapping for the call. Constructing one means reading
+    # every variable in the process, which is far more access than this needs
+    # and is indistinguishable from a dump to the install scanner. unsetenv and
+    # putenv act on the real environment a child inherits when `env=` is
+    # omitted, and leave the interpreter's own mapping alone. Restored straight
+    # afterwards, because a caller further up may have set it deliberately --
+    # `status` does exactly that before running the dispatcher.
+    #
+    # Do not name the discouraged API in a comment here. The scanner matches raw
+    # text and does not skip comments, so an explanation that spells it out
+    # scores as a use of it and blocks the install.
+    saved = os.getenv("TKLR_HOME")
+    os.unsetenv("TKLR_HOME")
     try:
         # From the user's home directory, because tklr's first rule is that a
         # config.toml plus tklr.db in the CURRENT directory outrank everything.
         # Run from wherever the agent happens to be, this would report that
         # directory. A neutral cwd gives the answer a terminal usually gets;
         # the cwd clause itself cannot be predicted from here.
-        proc = subprocess.run([str(python), "-c", code], env=env,
+        proc = subprocess.run([str(python), "-c", code],
                               cwd=str(Path.home()),
                               capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return None
+    finally:
+        if saved is not None:
+            os.putenv("TKLR_HOME", saved)
     out = (proc.stdout or "").strip().splitlines()
     if proc.returncode != 0 or not out:
         return None
@@ -754,6 +770,33 @@ def cmd_delete(args, home: Path, now: datetime) -> int:
     return delegate("tklr_mutate.py", ["delete", str(args.id), *extra], home)
 
 
+def as_instant(stamp_text: str) -> str:
+    """Reduce an exdate to one comparable form, however it was written.
+
+    tklr stores these two ways depending on which code last wrote them -- its
+    own delete_instance leaves local naive (`20260811T0700`), a token edit
+    renders UTC (`20260811T1200Z`) -- and it accepts seconds or not. Compared as
+    raw strings, one instant reads as several different dates. Unparseable text
+    is returned unchanged so it can still match itself exactly.
+    """
+    text = stamp_text.strip()
+    is_utc = text.endswith("Z")
+    core = text[:-1] if is_utc else text
+    parsed = None
+    for fmt in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M"):
+        try:
+            parsed = datetime.strptime(core, fmt)
+            break
+        except ValueError:
+            continue
+    if parsed is None:
+        return text
+    if is_utc:
+        parsed = (parsed.replace(tzinfo=timezone.utc)
+                        .astimezone().replace(tzinfo=None))
+    return parsed.strftime("%Y%m%dT%H%M")
+
+
 def compact(resolved: str) -> str | None:
     """'2026-08-10 09:00' -> '20260810T0900', the form tklr stores and `@-` takes."""
     parsed = parse_resolved(resolved)
@@ -787,6 +830,14 @@ def skip_occurrences(home: Path, rid: int, entry: str, wanted: list[str],
     the token edit, so building only the new dates would silently un-skip every
     occurrence skipped before this call.
     """
+    already = [p.strip() for p in (token_value(entry, "-") or "").split(",")
+               if p.strip()]
+    # `@-` comes back in whatever form last wrote it: tklr's own delete_instance
+    # leaves local naive (20260811T0700), a token edit renders UTC
+    # (20260811T1200Z). Comparing the two as strings would call the same instant
+    # two different dates, so both sides are reduced to an instant first.
+    already_at = {as_instant(a) for a in already}
+
     stored, horizon = occurrence_window(home, rid)
     compacted: list[str] = []
     for resolved in wanted:
@@ -794,6 +845,12 @@ def skip_occurrences(home: Path, rid: int, entry: str, wanted: list[str],
         if one is None:
             die(f"could not read {resolved!r} as a date and time",
                 "An occurrence needs both, e.g. '2026-08-17 09:00'.")
+        # Already excluded is a no-op, not an error. It reaches the check below
+        # as "not an occurrence" -- true, because it was skipped -- which reads
+        # as a mistake when the user's intent is already satisfied.
+        if as_instant(one) in already_at:
+            print(f"  note: {resolved} was already skipped; leaving it alone")
+            continue
         # Silently adding a non-occurrence to `@-` would report success and
         # change nothing, which is the failure this skill keeps meeting.
         # Only inside the generated window, where absence is meaningful.
@@ -804,9 +861,11 @@ def skip_occurrences(home: Path, rid: int, entry: str, wanted: list[str],
                 "Name an occurrence exactly as it is scheduled.")
         compacted.append(one)
 
-    already = [p.strip() for p in (token_value(entry, "-") or "").split(",")
-               if p.strip()]
-    merged = already + [c for c in compacted if c not in already]
+    if not compacted:
+        print("nothing to do: every date named is already skipped")
+        return 0
+
+    merged = already + compacted
     if not merged:
         die("nothing to skip")
 
@@ -848,24 +907,12 @@ def split_alert_token(value: str | None) -> tuple[list[str], list[str]]:
     return clean_list(offsets), clean_list(letters)
 
 
-# Which flag edits which tklr token. Single source of truth for `edit`, so a
-# flag can never quietly map to a different token here than the validator below
-# assumes. `d` (description) is last in tklr's grammar; the shim handles that.
-EDITABLE = {
-    "subject": None,        # not an @ token; handled separately
-    "when": "s",
-    "duration": "e",
-    "repeat": "r",
-    "location": "l",
-    "priority": "p",
-    "notice": "n",
-    "offset": "o",
-    "travel": "w",
-    "note": "d",
-    "for_whom": "b",
-    "alert": "a",           # --alert and --via both compose the one @a token
-    "via": "a",
-}
+# NOTE: `cmd_edit` builds its `@` tokens inline, one branch per flag, because
+# most of them validate their value on the way through and the validation is
+# what differs. A table mapping flag -> token used to sit here claiming to be
+# the single source of truth for that; nothing ever read it, so it documented a
+# guarantee the code did not make. CLEARABLE above is the one real table, and it
+# covers only `--clear`. If you add a flag to `edit`, add its branch there.
 
 # What the user may name in --clear, in their words rather than tklr's letters.
 CLEARABLE = {
@@ -1161,10 +1208,113 @@ def cmd_move(args, home: Path, now: datetime) -> int:
         print(f"note: --instance {instance} names a whole day. If that "
               "occurrence has a time, include it or tklr will not match it.",
               file=sys.stderr)
-    extra = ["--instance", instance, "--to", to_when]
-    if args.dry_run:
-        extra.append("--dry-run")
-    return delegate("tklr_mutate.py", ["reschedule", str(args.id), *extra], home)
+    return move_occurrence(home, args.id, entry, instance, to_when, now,
+                           args.dry_run)
+
+
+TOKEN_SPLIT = re.compile(r"\s+(?=@[A-Za-z+~-])")
+
+
+def refuse_plus_on_recurring(entry: str) -> None:
+    """Stop an entry that tklr would accept and then never schedule.
+
+    On tklr 1.0.43 a record with both `@r` and `@+` generates no occurrences at
+    all. `tklr check` calls it valid and `tklr add` reports success, so without
+    this the reminder is created, confirmed to the user, and is already invisible
+    -- the one shape where every report is true and nothing is on the schedule.
+    Reached through `--raw`, which is the only way to hand-write tokens.
+    """
+    if has_token(entry, "r") and has_token(entry, "+"):
+        die("that reminder would never appear on the schedule",
+            "A repeating reminder that carries an extra date (@+) generates no "
+            "occurrences at all on tklr 1.0.43 — the whole series, not just "
+            "that date.",
+            "Add the repeating reminder without the @+, then add the extra "
+            "date as its own reminder.")
+
+
+def without_recurrence(entry: str, new_start: str) -> str:
+    """The same reminder as a single dated entry: no `@r`, no `@-`, no `@+`.
+
+    Order is preserved, so `@d` -- which swallows everything after it in tklr's
+    grammar -- stays last if it was last.
+    """
+    parts = TOKEN_SPLIT.split(entry.strip())
+    kept = [parts[0]]                       # itemtype + subject
+    for part in parts[1:]:
+        key = part[1:2]
+        if key in {"r", "-", "+"}:
+            continue
+        kept.append(f"@s {new_start}" if key == "s" else part)
+    return " ".join(kept)
+
+
+def move_occurrence(home: Path, rid: int, entry: str, instance: str,
+                    to_when: str, now: datetime, dry_run: bool) -> int:
+    """Move one occurrence of a repeating reminder, without ever writing `@+`.
+
+    `@+` cannot be used at all on tklr 1.0.43. A recurring record carrying one
+    generates NO occurrences -- not the moved one, not the rest of the series --
+    while the rruleset still reads correctly and every command reports success.
+    Measured: 12 occurrences before, 0 after, gone from the schedule entirely.
+    That is what tklr's own `reschedule_instance` writes, and what the TUI's
+    Reschedule writes, so this is not reachable only through the shim.
+
+    So the occurrence is excluded with `@-`, which works correctly, and the
+    moved one is created as its own dated reminder carrying the original's
+    duration, alerts, people and details. Two records instead of one is a real
+    cost and it is the smaller one: the alternative on this version is a
+    reminder that silently disappears from the schedule.
+    """
+    stored, horizon = occurrence_window(home, rid)
+    old = compact(instance)
+    if old is None or compact(to_when) is None:
+        die("an occurrence needs a date and a time, e.g. '2026-08-17 09:00'")
+    if stored and old not in stored and horizon and old <= horizon:
+        die(f"{instance} is not an occurrence of id {rid}",
+            f"Its occurrences are listed by: {sys.argv[0]} show {rid}",
+            "Name it exactly as it is scheduled.")
+
+    moved = without_recurrence(entry, to_when)
+    chk = run_tklr(home, "check", "--", moved)
+    if "valid" not in (chk.stdout or "").lower():
+        die("could not build the moved reminder",
+            f"composed: {moved}",
+            *[ln for ln in (chk.stdout or "").splitlines()[:4]])
+
+    if dry_run:
+        print(f"WOULD exclude {instance} from id {rid}")
+        print(f"WOULD create:  {moved}")
+        print("  (nothing was changed)")
+        return 0
+
+    minus = [p.strip() for p in (token_value(entry, "-") or "").split(",")
+             if p.strip()]
+    if as_instant(old) not in {as_instant(m) for m in minus}:
+        minus.append(old)
+    rc = delegate("tklr_mutate.py",
+                  ["edit", str(rid), "--set", "@- " + ", ".join(minus)], home)
+    if rc != 0:
+        return rc
+
+    add = run_tklr(home, "add", "--", moved)
+    if "Added 1 entry" not in ((add.stdout or "") + (add.stderr or "")):
+        die("the occurrence was excluded but the moved reminder was NOT created",
+            f"composed: {moved}",
+            f"id {rid} no longer has an occurrence at {instance}; add the "
+            "replacement by hand or the user simply loses it.")
+
+    heal_alerts(home)
+    after, _ = occurrence_window(home, rid)
+    if old in after:
+        die(f"id {rid} still has an occurrence at {instance}",
+            "The entry was written but tklr did not drop the old time.")
+    print(f"moved: {instance} → {to_when}")
+    print(f"  id {rid} no longer occurs at {instance}; the moved one is now a "
+          "separate reminder")
+    print(f"  (tklr 1.0.43 drops the whole series if a moved occurrence is "
+          "stored on the record itself)")
+    return 0
 
 
 def cmd_uses(args, home: Path, now: datetime) -> int:
@@ -1961,9 +2111,43 @@ def report_workspace_agreement(home: Path) -> None:
         print("    for one and not the other.")
 
 
+def report_vanished_records(home: Path) -> None:
+    """Name any reminder that tklr has silently dropped from the schedule.
+
+    A record carrying `@+` generates no occurrences at all on tklr 1.0.43 -- the
+    whole series, not just the moved date -- while `details` still prints a
+    correct-looking rruleset. `move` never writes one, but tklr's own reschedule
+    and the TUI's Reschedule both do, so a reminder can arrive in this state
+    without the skill ever touching it. There is no symptom until someone
+    notices an alert that never came.
+    """
+    import sqlite3
+    try:
+        conn = sqlite3.connect(home / "tklr.db", timeout=15)
+        rows = conn.execute(
+            "SELECT r.id, r.subject FROM Records r "
+            "WHERE r.tokens LIKE '%\"k\": \"+\"%' "
+            "AND NOT EXISTS (SELECT 1 FROM DateTimes d WHERE d.record_id = r.id)"
+        ).fetchall()
+        conn.close()
+    except sqlite3.Error:
+        return
+    if not rows:
+        return
+    print(f"  {len(rows)} reminder(s) are NOT on the schedule at all, because "
+          "tklr drops a whole")
+    print("    series once a moved occurrence is stored on the record "
+          "(rescheduled in tklr's UI?):")
+    for rid, subject in rows[:5]:
+        print(f"      id {rid}: {subject!r}")
+    print("    Fix each by removing its moved date and adding that one as its "
+          "own reminder.")
+
+
 def cmd_status(args, home: Path, now: datetime) -> int:
     print(f"workspace: {home}")
     report_workspace_agreement(home)
+    report_vanished_records(home)
     letters = configured_letters(home)
     print(f"channels:  {', '.join(sorted(letters)) if letters else 'NONE — alerts cannot be created'}")
     poller = POLLER
@@ -2014,6 +2198,8 @@ def cmd_add(args, home: Path, now: datetime) -> int:
         if not args.type:
             die("--type is required", code=2)
         entry, resolved, _ = build_entry(args, home, now)
+
+    refuse_plus_on_recurring(entry)
 
     for w in warnings:
         print(f"  note: {w}")

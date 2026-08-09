@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import copy
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,12 +46,14 @@ TESTED_AGAINST = "1.0.43"  # informational only; not enforced
 UI_FALLBACK = (
     "Workaround: the interactive UI is the only other place tklr exposes these\n"
     "  operations — run `tklr ui` and select the reminder. For DELETE that is a\n"
-    "  genuine fallback. For RESCHEDULE of a reminder with no `@r` it is NOT:\n"
-    "  view.py's Reschedule calls the same reschedule_instance, which appends\n"
-    "  `@- old @+ new` and produces no EXDATE without an `@r`, so the reminder\n"
-    "  ends up at BOTH times (tklr 1.0.43). Delete it and re-add it at the new\n"
-    "  time instead. Then tell whoever maintains this skill that tklr's\n"
-    "  internals moved, so the shim can be updated."
+    "  genuine fallback. For RESCHEDULE it is NOT, either way: view.py's\n"
+    "  Reschedule calls the same reschedule_instance, which appends\n"
+    "  `@- old @+ new` and nothing else (tklr 1.0.43). With no `@r` no EXDATE\n"
+    "  is produced and the reminder ends up at BOTH times; with an `@r` the\n"
+    "  `@+` stops the record generating ANY occurrences and the whole series\n"
+    "  leaves the schedule. Use the wrapper's `move`, which writes no `@+`.\n"
+    "  Then tell whoever maintains this skill that tklr's internals moved, so\n"
+    "  the shim can be updated."
 )
 
 
@@ -582,6 +585,22 @@ def main() -> int:
         sets = grouped_sets(args.sets)
         removes = list(args.removes)
 
+        # Same trap as `add --raw`: a record holding both `@r` and `@+` is
+        # accepted, saved, reported as edited, and generates no occurrences at
+        # all on tklr 1.0.43. Checked against the result rather than the flags,
+        # since either token can arrive from the existing entry.
+        has_r = "r" in sets or (re.search(r"(?:^|\s)@r(?:\s|$)", before_entry or "")
+                                and "r" not in removes)
+        has_plus = "+" in sets or (re.search(r"(?:^|\s)@\+(?:\s|$)", before_entry or "")
+                                   and "+" not in removes)
+        if has_r and has_plus:
+            refuse(f"that edit would take id {rid} ({subject!r}) off the "
+                   "schedule entirely.",
+                   "A repeating record carrying an extra date (@+) generates no "
+                   "occurrences at all on tklr 1.0.43.",
+                   "Exclude dates with @- instead, and add moved ones as their "
+                   "own reminders.")
+
         # changed and saved are reported separately on purpose: "the edit was a
         # no-op" and "the result would not parse" are different answers, and
         # only the second is a failure. Collapsing them into one boolean is what
@@ -630,6 +649,20 @@ def main() -> int:
     new_when = parsed[1] if isinstance(parsed, tuple) else parsed
     if new_when is None:
         sys.exit(f"error: could not understand --to {args.to_dt!r}")
+
+    # Refused rather than warned about: on tklr 1.0.43 this writes `@+`, and a
+    # recurring record carrying one generates NO occurrences at all -- the whole
+    # series leaves the schedule while the rruleset still reads correctly and
+    # this function returns True. Measured: 12 occurrences before, 0 after.
+    # The wrapper's `move` does it without `@+`; nothing should reach here.
+    before_entry = render_entry(ctrl, rid)
+    if re.search(r"(?:^|\s)@r(?:\s|$)", before_entry or ""):
+        refuse(f"rescheduling one occurrence of id {rid} ({subject!r}) would "
+               "remove the ENTIRE series from the schedule.",
+               "tklr 1.0.43 generates no occurrences for a repeating record "
+               "that stores a moved one.",
+               "Use the wrapper's `move`, which excludes the old date and adds "
+               "the moved one as its own reminder.")
 
     fn = require(ctrl, "reschedule_instance",
                  ["record_id", "old_instance_text", "new_when"])

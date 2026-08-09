@@ -15,9 +15,13 @@ of them so callers never have to:
 Usage
   set_alert_channel.py --list
   set_alert_channel.py --mail-accounts        # himalaya account -> From: address
-  set_alert_channel.py r 'hermes send --to PLATFORM:TARGET --quiet "⏰ Reminder: {name} — starts {when} ({start})"'
+  set_alert_channel.py r '<any shell command that sends a message>'
   set_alert_channel.py --remove r
   set_alert_channel.py --home ~/.config/tklr r '<command>'
+
+A letter's value is a plain shell command, so the channel can be anything this
+machine can send with. The only host-specific part is validating a chat target
+against what the machine can reach, which goes through host.py.
 
 Exit codes: 0 ok, 1 rejected/failed, 2 usage error.
 """
@@ -32,6 +36,8 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+
+import host
 
 RESERVED = {"n"}  # built-in: bell + notification popup
 
@@ -283,15 +289,18 @@ def check_placeholders(command: str) -> None:
 
 
 def check_send_target(command: str) -> None:
-    """Refuse a `hermes send --to` target that does not exist.
+    """Refuse a chat target that does not exist on this machine.
 
-    `hermes send` prints "sent" and exits 0 for a room id that is not real, so
-    a made-up target is a perfect black hole: the dispatcher sees success,
+    A host that reports success for a destination it cannot actually reach
+    makes a made-up target a perfect black hole: the dispatcher sees success,
     deletes the alert row, logs "sent", and the message reaches nobody. The
     only moment this is catchable is now, against the list of real targets.
 
-    Only `--to <platform>:<id>` is checked, and only when the list can be
-    read -- an unreachable `hermes send --list` must not block setup.
+    Only `--to <platform>:<id>` is checked, and only when the host's listing
+    can be read -- an unreachable listing must not block setup.
+
+    The listing itself comes from host.py. Nothing about which agent provides
+    it belongs here.
     """
     m = re.search(r"--to\s+(\S+)", command)
     if not m:
@@ -299,20 +308,14 @@ def check_send_target(command: str) -> None:
     target = m.group(1).strip("\"'")
 
     try:
-        listed = subprocess.run(["hermes", "send", "--list"], capture_output=True,
-                                text=True, timeout=60, check=False)
-    except (OSError, subprocess.SubprocessError):
+        listed = host.chat_list()
+    except host.HostError:
         return
-    if listed.returncode != 0 or not listed.stdout.strip():
+    if not listed.strip():
         return
 
-    available = re.findall(r"\b\w+:\S+", listed.stdout)
-    # Platform names come from the `platform:id` targets and from the section
-    # headings `--list` groups them under, so a platform configured with only a
-    # home channel is still recognised.
-    platforms = {c.split(":", 1)[0].lower() for c in available}
-    platforms |= {s.lower() for s in re.findall(r"^\s*([A-Za-z][\w-]*):\s*$",
-                                                listed.stdout, re.M)}
+    available = host.chat_target_ids(listed)
+    platforms = host.chat_platforms(listed)
 
     # The platform is a closed set and always checkable. Getting it wrong -- an
     # account or provider name where a platform belongs -- would otherwise be
@@ -324,7 +327,7 @@ def check_send_target(command: str) -> None:
             f"       Configured platforms: {', '.join(sorted(platforms))}\n"
             "       A target is `<platform>:<id>`, or a bare platform name for its\n"
             "       home channel -- never an account or provider name. Take one\n"
-            "       from `hermes send --list`.")
+            f"       from {host.target_hint()}.")
 
     if ":" not in target or not available:
         return  # bare platform name means the home channel; nothing more to check
@@ -342,9 +345,9 @@ def check_send_target(command: str) -> None:
         return
 
     die(f"'{target}' is not one of this machine's messaging targets.\n"
-        "       `hermes send` exits 0 even for a room that does not exist, so\n"
+        "       A send to a room that does not exist can report success, so\n"
         "       nothing would ever tell you the alerts went nowhere.\n"
-        "       Copy a target verbatim from `hermes send --list`:\n"
+        f"       Copy a target verbatim from {host.target_hint()}:\n"
         + "\n".join(f"         {c}" for c in available))
 
 

@@ -55,8 +55,13 @@ Workspace: --home, else $TKLR_HOME, else ~/.config/tklr. Only pass --home for
 a non-default workspace.
 
 Exit codes: 0 success, 1 refused or failed, 2 usage error.
-Alerts are delivered separately, by ~/.hermes/scripts/tklr_alert_poller.py
-running once a minute from Hermes cron. This script never sends anything.
+Alerts are delivered separately, by tklr_alert_poller.py running once a minute
+from the host agent's scheduler. This script never sends anything.
+
+Everything host-specific -- what channels exist, how to send to one, how to
+schedule the dispatcher -- is in host.py, which is the only file that needs
+changing to run this skill under a different agent. Do not add a host call
+anywhere else; see that file's header.
 """
 
 from __future__ import annotations
@@ -72,6 +77,8 @@ import tomllib
 from datetime import date, datetime, timedelta
 from typing import NamedTuple
 from pathlib import Path
+
+import host
 
 ITEMTYPE = {
     "event": "*",
@@ -718,42 +725,31 @@ ALERT_TEMPLATE = ('--quiet "⏰ Reminder: {name} — starts {when} ({start}). '
                   '{description}"')
 
 
-_send_list_cache: dict[str | None, str] = {}
+def host_or_die(call, *args):
+    """Run a host.py call, mapping its failure onto this script's reporting.
 
-
-def send_list(platform: str | None = None) -> str:
-    """`hermes send --list`, optionally filtered to one platform.
-
-    Cached per process: `setup` consults it three times and each call is a
-    subprocess with a 60s timeout.
+    host.py never exits, because the same missing host command is fatal to
+    `setup` and merely worth reporting in `status`. Callers that want to carry
+    on catch host.HostError themselves; everything else comes through here.
     """
-    if platform in _send_list_cache:
-        return _send_list_cache[platform]
-    cmd = ["hermes", "send", "--list"] + ([platform] if platform else [])
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError) as exc:
-        die(f"could not run `{' '.join(cmd)}`: {exc}")
-    if proc.returncode != 0:
-        die(f"`{' '.join(cmd)}` failed", (proc.stderr or "").strip())
-    _send_list_cache[platform] = proc.stdout or ""
-    return _send_list_cache[platform]
+        return call(*args)
+    except host.HostError as exc:
+        die(str(exc), *([exc.detail] if exc.detail else []))
+
+
+def chat_list(platform: str | None = None) -> str:
+    """The host's chat destinations, verbatim, or die saying why it can't tell."""
+    return host_or_die(host.chat_list, platform)
 
 
 def platform_targets(platform: str) -> list[str]:
-    """Every `platform:id` target `hermes send --list` reports for a platform."""
-    out = send_list(platform)
-    seen, targets = set(), []
-    for match in re.findall(rf"\b{re.escape(platform)}:\S+", out):
-        target = match.rstrip(".,")
-        if target not in seen:
-            seen.add(target)
-            targets.append(target)
-    return targets
+    """Every target this machine has on one platform."""
+    return host_or_die(host.platform_targets, platform)
 
 
-CRON_JOB_NAME = "tklr-alert-poller"
-POLLER = Path.home() / ".hermes" / "scripts" / "tklr_alert_poller.py"
+CRON_JOB_NAME = host.CRON_JOB_NAME
+POLLER = host.dispatcher_path()
 
 
 def run_installer(home: Path) -> None:
@@ -788,24 +784,16 @@ def run_installer(home: Path) -> None:
     print(f"tklr: ready{f' ({version})' if version else ''}")
 
 
-def cron_job_present() -> bool | None:
-    """True/False if `hermes cron list` could be read, None if it could not."""
-    try:
-        proc = subprocess.run(["hermes", "cron", "list"], capture_output=True,
-                              text=True, timeout=120)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    return CRON_JOB_NAME in (proc.stdout or "")
+# True/False when the schedule could be read, None when it could not.
+cron_job_present = host.cron_job_present
 
 
 def ensure_dispatcher() -> bool:
-    """Copy the poller into ~/.hermes/scripts/, where cron can reach it.
+    """Copy the poller to wherever the host's scheduler will accept it.
 
-    The scheduler refuses any script path outside that directory -- absolute
-    paths, `../` and symlinks are all rejected -- so the skill's own copy can
-    never be scheduled directly.
+    Which directory that is, and why it cannot simply be the skill's own copy,
+    is host.dispatcher_path()'s business. On a host with no such restriction
+    that path is the skill's own copy and this reduces to a no-op.
     """
     source = SKILL_SCRIPTS / "tklr_alert_poller.py"
     if not source.is_file():
@@ -834,28 +822,12 @@ def ensure_cron_job() -> tuple[bool, str]:
 
     present = cron_job_present()
     if present is None:
-        return False, ("could not read `hermes cron list` -- create the job by "
-                       "hand and confirm it, or nothing will ever be delivered")
+        return False, (f"could not read {host.schedule_hint()} -- create the job "
+                       "by hand and confirm it, or nothing will ever be delivered")
     if present:
         return True, f"cron job '{CRON_JOB_NAME}' already present"
 
-    # --script takes the BARE FILENAME: the scheduler resolves it inside
-    # ~/.hermes/scripts/ and rejects anything that escapes that directory.
-    try:
-        proc = subprocess.run(
-            ["hermes", "cron", "create", "* * * * *",
-             "--script", "tklr_alert_poller.py", "--no-agent",
-             "--name", CRON_JOB_NAME, "--deliver", "local"],
-            capture_output=True, text=True, timeout=120)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, f"could not run `hermes cron create`: {exc}"
-    if proc.returncode != 0:
-        return False, f"`hermes cron create` failed: {(proc.stderr or '').strip()}"
-
-    if cron_job_present():
-        return True, f"created cron job '{CRON_JOB_NAME}' — dispatching every minute"
-    return False, ("`hermes cron create` reported success but the job is not in "
-                   "`hermes cron list`")
+    return host.create_cron_job()
 
 
 def cmd_setup(args, home: Path, now: datetime) -> int:
@@ -865,17 +837,16 @@ def cmd_setup(args, home: Path, now: datetime) -> int:
     platform the user is talking to it on. This turns that one fact into a
     working channel without asking the user anything, which is the point --
     every version of this flow that asked "where would you like reminders?"
-    ended up proposing a dead platform that happened to sort first in
-    `hermes send --list`.
+    ended up proposing a dead platform that happened to sort first in the
+    host's own listing.
     """
     platform = args.platform.strip().lower().rstrip(":")
     if not platform:
         die("--platform needs a name, e.g. --platform telegram", code=2)
 
-    known = {p.lower() for p in re.findall(r"^\s*([A-Za-z][\w-]*):\s*$",
-                                           send_list(), re.M)}
-    known |= {t.split(":", 1)[0].lower()
-              for t in re.findall(r"\b\w+:\S+", send_list())}
+    # Empty means the host could not tell us, which passes: a listing this
+    # script cannot read is not evidence the platform is wrong.
+    known = host_or_die(host.chat_platforms)
     if known and platform not in known:
         die(f"'{platform}' is not a messaging platform on this machine.",
             f"configured platforms: {', '.join(sorted(known))}",
@@ -886,7 +857,7 @@ def cmd_setup(args, home: Path, now: datetime) -> int:
     else:
         targets = platform_targets(platform)
         if not targets:
-            die(f"'{platform}' has no targets in `hermes send --list`.",
+            die(f"'{platform}' has no targets in {host.target_hint()}.",
                 "it may be configured but not connected. Ask the user which",
                 "channel to use instead, or pass --target explicitly.")
         if len(targets) > 1:
@@ -899,7 +870,7 @@ def cmd_setup(args, home: Path, now: datetime) -> int:
     # should not trigger a package install before it is reported.
     run_installer(home)
 
-    command = f"hermes send --to {target} {ALERT_TEMPLATE}"
+    command = host.chat_send_command(target, ALERT_TEMPLATE)
     rc = delegate("set_alert_channel.py", [args.letter, command], home)
     if rc != 0:
         return rc
@@ -963,7 +934,7 @@ def create_test_alert(letter: str, home: Path, _now: datetime) -> int:
     away, always clear of the 2:00 floor.
 
     The clock is re-read here rather than taken from the caller: `setup` runs
-    the installer and `hermes cron` first, each with a long timeout, so the
+    the installer and the host's scheduler first, each with a long timeout, so
     timestamp from program start can be minutes stale by the time we arrive.
     """
     offset_min = 2
@@ -1035,7 +1006,8 @@ def _read_mail_accounts(home: Path) -> list[tuple[str, str]]:
     return out
 
 
-CHAT_TEMPLATE = ("hermes send --to %s " + ALERT_TEMPLATE)
+# notify-send is an ordinary CLI, not a host call, so it stays here: a port
+# keeps this route unchanged. Same for himalaya, in himalaya_command below.
 DESKTOP_COMMAND = ('notify-send "⏰ Reminder: {name}" '
                    '"starts {when} ({start}). {description}"')
 
@@ -1123,82 +1095,26 @@ def discover_routes(home: Path, known_email: str | None = None) -> list[Route]:
             f"'{DESKTOP_COMMAND}'",
             "a desktop notification on this machine"))
 
+    # A host that cannot list its channels is not a reason to fail: the email
+    # and desktop routes above stand on their own, and an offer of nothing is
+    # still an honest offer.
     try:
-        listed = send_list()
-    except SystemExit:
+        listed = host.chat_list()
+    except host.HostError:
         listed = ""
     # An offer must not name a destination the user already has. Two targets on
     # one platform are one destination to them: with a named room configured,
     # offering that platform contradicts the sentence just above it.
     already = {d.lower() for d in describe_channels(letters)}
-    for target, label, offer in chat_targets(listed):
+    for target, label, offer in host.chat_targets(listed):
         if (target in commands or offer.lower() in already
                 or any(label == r.label for r in routes)):
             continue
         letter = free[len(routes)] if len(free) > len(routes) else "<letter>"
+        command = host.chat_send_command(target, ALERT_TEMPLATE)
         routes.append(Route(label, f"python3 {SELF} channels --set {letter} "
-                                   f"'{CHAT_TEMPLATE % target}'", offer))
+                                   f"'{command}'", offer))
     return routes
-
-
-# A `--list` entry: leading whitespace, `platform:id`, anything else on the
-# line, and an optional trailing `(kind)` annotation.
-CHAT_LINE = re.compile(r"^\s+(\w+:\S+).*?(?:\((\w+)\)\s*)?$")
-
-# An id a person would recognise reads like a name: it starts with a letter and
-# continues with letters, digits, spaces, `_`, `-` or `.`. Everything else --
-# room ids, phone numbers, numeric group ids, user handles -- is an internal
-# identifier whatever platform produced it. This deliberately knows nothing
-# about any particular service: the skill supports whatever `hermes send`
-# supports, including platforms that did not exist when this was written, so
-# there is no list of sigils to keep current.
-READABLE_ID = re.compile(r"^[A-Za-z][\w .-]*$")
-
-# `--list` annotations that mean one-to-one rather than a shared destination.
-# English words it prints, not platforms: anything else is treated as a named
-# room and offered by that name.
-DIRECT_KINDS = {"dm", "chat", "direct", "private"}
-
-
-def chat_targets(listed: str) -> list[tuple[str, str, str]]:
-    """[(target, label, how to offer it)] from `hermes send --list`.
-
-    The label matters as much as the target. An offer the user cannot evaluate
-    is not an offer, and a raw room id or phone number is exactly that -- so an
-    opaque target is described by its platform and kind, and only a
-    human-readable id is quoted. Identical labels collapse: two direct-message
-    targets on one platform are a single offer to name that platform.
-
-    Everything here is derived from `--list` itself. The platform name, the
-    kind and the id all come from its output; nothing is special-cased.
-    """
-    out: list[tuple[str, str, str]] = []
-    seen: set[str] = set()
-    for line in listed.splitlines():
-        m = CHAT_LINE.match(line)
-        if not m:
-            continue
-        target, kind = m.group(1), (m.group(2) or "chat")
-        platform, _, ident = target.partition(":")
-        name = platform.capitalize()
-        readable = bool(READABLE_ID.match(ident))
-        label = f"{name} {kind}: {ident}" if readable else f"{name} {kind}"
-        # The kind is `--list`'s own annotation, not a platform trait. A named
-        # shared destination is offered by its name whatever the annotation
-        # calls it -- group, channel, room; a one-to-one one by its platform.
-        if not readable:
-            offer = name
-        elif kind in DIRECT_KINDS:
-            offer = f"{name} ({ident})"
-        elif kind == "group":
-            offer = f"the {ident} group chat"
-        else:
-            offer = f"the {ident} {kind}"
-        if label in seen:
-            continue
-        seen.add(label)
-        out.append((target, label, offer))
-    return out
 
 
 def print_routes(home: Path, known_email: str | None = None) -> list[Route]:
@@ -1222,8 +1138,9 @@ def print_routes(home: Path, known_email: str | None = None) -> list[Route]:
         print("      configured on this machine. Not something you can add, and")
         print("      not something to stay quiet about: the closing block says")
         print("      email exists and needs an account. Do not improvise another")
-        print("      email route — `hermes send --to email:…` is a different,")
-        print("      usually unconfigured mechanism, not a fallback.")
+        print("      email route — a chat platform literally called 'email'")
+        print("      is a different, usually unconfigured mechanism, not a")
+        print("      fallback. Email on this skill means himalaya.")
     return routes
 
 
@@ -1328,8 +1245,8 @@ def cmd_email(args, home: Path, now: datetime) -> int:
         die("himalaya has no email accounts configured, so email is not "
             "available on this machine.",
             "Say that plainly rather than improvising another route --",
-            "`hermes send --to email:...` is a different, usually unconfigured",
-            "mechanism, not a fallback.")
+            "a chat platform literally called 'email' is a different, usually",
+            "unconfigured mechanism, not a fallback. Email means himalaya.")
     elif len(accounts) > 1:
         die(f"himalaya has {len(accounts)} accounts — say which one sends, "
             "with --from:",
@@ -1497,7 +1414,7 @@ def cmd_status(args, home: Path, now: datetime) -> int:
     print("cron job:  " + {
         True: f"'{CRON_JOB_NAME}' scheduled",
         False: f"MISSING — NOTHING WILL BE DELIVERED. Run: setup --platform <platform>",
-        None: "could not read `hermes cron list` — verify by hand",
+        None: f"could not read {host.schedule_hint()} — verify by hand",
     }[cron])
     if poller.exists() and stale:
         print("  (not running it: an out-of-date poller ignores --check and would")
@@ -1556,7 +1473,7 @@ def cmd_add(args, home: Path, now: datetime) -> int:
                   if l.strip() and "aggregate" not in l and "DateTimes" not in l]
         die("the reminder was not created", f"composed: {entry}", *detail[:8])
 
-    heal = Path.home() / ".hermes" / "scripts" / "tklr_alert_poller.py"
+    heal = POLLER
     heal_failed = ""
     if heal.exists():
         done = subprocess.run([sys.executable, str(heal), "--heal"],
@@ -1618,7 +1535,7 @@ def verify_scheduled(home: Path, record_id: int, entry: str, resolved: str | Non
         die(f"id {record_id} was saved but is NOT on the schedule "
             "(no occurrence was generated)",
             heal_failed or "tklr's derived tables are stale.",
-            "Fix: python3 ~/.hermes/scripts/tklr_alert_poller.py --heal --verbose",
+            f"Fix: python3 {POLLER} --heal --verbose",
             f"Then confirm with: {sys.argv[0]} show {record_id}")
 
     if not wanted_alert:
@@ -1637,7 +1554,7 @@ def verify_scheduled(home: Path, record_id: int, entry: str, resolved: str | Non
         die(f"id {record_id} was saved but NO ALERT was scheduled — nobody will "
             "be notified",
             heal_failed or "The alert row tklr should have generated is missing.",
-            "Fix: python3 ~/.hermes/scripts/tklr_alert_poller.py --heal --verbose",
+            f"Fix: python3 {POLLER} --heal --verbose",
             f"If that does not help, delete it and re-add with the alert further "
             f"out: {sys.argv[0]} delete {record_id}")
 
@@ -1684,8 +1601,8 @@ def main() -> int:
             "  be notified. A trigger less than 2 minutes away is refused, because\n"
             "  tklr would schedule nothing and say nothing.\n"
             "\n"
-            "  Delivery itself is not done here — ~/.hermes/scripts/tklr_alert_poller.py\n"
-            "  runs every minute from Hermes cron and sends what is due.\n"
+            "  Delivery itself is not done here — tklr_alert_poller.py runs every\n"
+            "  minute from the host agent's scheduler and sends what is due.\n"
             "\n"
             "workspace:\n"
             "  --home, else $TKLR_HOME, else ~/.config/tklr. Only pass --home for a\n"

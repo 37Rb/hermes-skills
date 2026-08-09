@@ -16,7 +16,7 @@ rather than from a running event loop.
       3. read rows whose trigger_datetime is now or earlier
       4. run each row's alert_command (shlex.split + subprocess, no shell)
       5. delete each row that was delivered
-      6. append a line to ~/.hermes/logs/tklr-alerts.log
+      6. append a line to the delivery log ($TKLR_ALERTS_LOG)
 
 There is no routing table and no send ledger. Delivery is defined entirely by
 the `[alerts]` section of the tklr workspace's config.toml: one lowercase
@@ -121,9 +121,16 @@ def _default_tklr_home() -> Path:
 
 
 DEFAULT_TKLR_HOME = _default_tklr_home()
-LOG_PATH = Path(
-    os.environ.get("TKLR_ALERTS_LOG") or Path.home() / ".hermes" / "logs" / "tklr-alerts.log"
-)
+
+# This file deliberately does NOT import host.py, unlike the rest of the skill:
+# it is copied out of the skill directory to wherever the host's scheduler
+# insists a script must live, and arrives there with no siblings. It needs no
+# host call anyway -- it runs the shell command stored in the workspace and has
+# no opinion about what that command is, which is exactly what makes the host
+# swappable. The two host-shaped paths it does have are env-overridable, so a
+# port sets the variables rather than editing this file.
+HOST_LOG_DIR = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "logs"
+LOG_PATH = Path(os.environ.get("TKLR_ALERTS_LOG") or HOST_LOG_DIR / "tklr-alerts.log")
 
 def lock_path_for(home: Path) -> Path:
     """One lock per workspace, not one lock for the whole machine.
@@ -142,7 +149,7 @@ def lock_path_for(home: Path) -> Path:
     except OSError:
         key = str(home)
     slug = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
-    return Path.home() / ".hermes" / "logs" / f".tklr-alerts.{slug}.lock"
+    return HOST_LOG_DIR / f".tklr-alerts.{slug}.lock"
 
 
 # How long `--heal` waits for the dispatcher to finish before giving up.
@@ -173,7 +180,7 @@ log = logging.getLogger("tklr-alerts")
 
 
 def setup_logging() -> None:
-    """Append to ~/.hermes/logs/tklr-alerts.log, matching Hermes' log layout."""
+    """Append to LOG_PATH, matching the host's own log layout."""
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=3)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))

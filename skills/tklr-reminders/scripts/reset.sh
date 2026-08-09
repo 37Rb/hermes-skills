@@ -21,6 +21,12 @@
 #   7. the ENTIRE tklr workspace          (~/.config/tklr — config AND database)
 #   8. tklr itself, only if uv owns it   (uv tool uninstall tklr-dgraham)
 #
+# HOST-SPECIFIC, all of it: every path above is Hermes layout and the cron
+# calls are Hermes' scheduler. This is a test-harness script rather than part
+# of the delivery path, so it is the last thing a port needs and the easiest to
+# reduce to whatever the new host's equivalents are. scripts/host.py names the
+# same seams for the Python side.
+#
 # What it NEVER touches:
 #   * the skill source directory itself — SKILL.md, scripts/, templates/,
 #     references/. That is the thing under test: a new person starts with these

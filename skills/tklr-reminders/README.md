@@ -4,6 +4,8 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) skill that turns 
 
 You talk to it in plain language. It works out the commands, and it delivers reminder alerts to whatever channels you use (Matrix, Telegram, Signal, email, SMS, desktop notifications) at the lead times you asked for.
 
+**It currently requires Hermes Agent.** A port to OpenClaw is planned; see [Portability](references/how-it-works.md#portability) for the details.
+
 Six kinds of reminder cover everything you'd ask for. You don't need to know them when using: you say what you want and the agent picks. But they are what the skill is made of, so here is each one as a conversation.
 
 **Event**: something that happens at a particular time. It goes on the calendar, it can hold travel time either side, and it is the only type that really needs a clock.
@@ -264,6 +266,6 @@ templates/alerts-config-example.toml  commented [alerts] reference
 
 ## License
 
-This skill is MIT licensed; see [LICENSE](../../LICENSE).
+This skill is published on ClawHub, which licenses every skill it hosts under [MIT-0](https://opensource.org/license/mit-0): use it, modify it, redistribute it, commercially or otherwise, with no attribution required.
 
 Tklr itself is a separate program, installed from PyPI as `tklr-dgraham`, and is licensed GPL-3.0-or-later. This skill invokes the `tklr` command; it does not include or link against its code.

@@ -1,11 +1,19 @@
 ---
 name: tklr-reminders
 category: productivity
-description: "calendar, schedule, events, appointments, tasks, alerts"
+# The first 57 chars are all Hermes puts in its system-prompt skill index
+# (SKILL_PROMPT_DESC_LIMIT=60, truncated to desc[:57]+"..."), so they stay
+# exactly as tuned: pure routing signal. The requirement sits after the cut,
+# where Hermes drops it for free and ClawHub still shows it in full.
+description: "calendar, schedule, events, appointments, tasks, alerts. Requires Hermes Agent."
 version: 1.0.0
-license: MIT
 platforms: [linux, macos]
 metadata:
+  openclaw:
+    requires:
+      bins: [hermes, tklr]
+    os: [linux, macos]
+    homepage: https://github.com/37Rb/hermes-skills/tree/main/skills/tklr-reminders
   hermes:
     blueprint:
       schedule: "37 6 * * *"
@@ -174,6 +182,7 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
 | `scripts/install.sh` | installs tklr; `setup` runs it for you — never call it yourself |
 | `scripts/set_alert_channel.py` | the only safe way to write `[alerts]` letters |
 | `scripts/tklr_alert_poller.py` | the every-minute alert dispatcher |
+| `scripts/host.py` | every call to the host agent, isolated — imported, never run |
 | `scripts/tklr_mutate.py` | low-level record edits |
 | `scripts/reset.sh` | undo setup, back to pristine, for testing |
 | `references/using-the-wrapper.md` | **every command you run** — load before composing one |

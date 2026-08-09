@@ -12,6 +12,14 @@
 # It deliberately does NOT invent [alerts] letters, and does NOT create the
 # cron job.
 #
+# HOST-SPECIFIC. Steps 1 and 3 assume a Hermes layout: uv shipped at
+# $HERMES_HOME/bin/uv and off PATH, and a scheduler that will only run scripts
+# living in ~/.hermes/scripts/. The Python side of the skill keeps all of this
+# in scripts/host.py (see its header for what a port has to change); a shell
+# script cannot import it, so these two steps are the shell half of the same
+# seam. Step 3 is the one that disappears entirely on a host whose scheduler
+# will run a script where it already lives.
+#
 # Not inventing letters matters: a letter defined as a placeholder no-op like
 # 'true' would make the dispatcher treat every alert as successfully
 # delivered and delete it, so reminders would silently reach nobody. Letters

@@ -118,7 +118,7 @@ whose trigger has passed).
 
 | Symptom | Cause and fix |
 |---------|---------------|
-| A reminder never fires | `$R show <id>` — a leading `?` and an `@d Import error` mean it was rejected. `$R channels` to check the letter exists, then re-create it. |
+| A reminder never fires | `$R show <id>` — a leading `?` and an `@d Import error` mean it was rejected, which only happens to records written by calling `tklr` directly. Delete it and add it again through `$R`, which refuses the input that produces a draft. |
 | Added an event, no alert row appears | Stale derived state. `python3 ~/.hermes/scripts/tklr_alert_poller.py --heal` |
 | A just-added event is missing from `days`/`agenda` but `details <id>` shows it | Same stale derived state — run the dispatcher with `--heal`, then re-read. |
 | Alert fires but nothing arrives | Run the dispatcher by hand — it prints the failure and logs it. Then test the letter's command directly, e.g. `hermes send --to <target> test`. |

@@ -277,7 +277,8 @@ underneath and is documented further down for reading, not for calling.
 |---------|-------|
 | "I've done that" (a task) | `$R done <id>` |
 | "Cancel Friday's meeting" | find the id, confirm which one, `$R delete <id>` |
-| "Move the dentist to Thursday at 2" | `$R move <id> --instance '<current datetime>' --to '2026-08-13 14:00'` |
+| "Move the dentist to Thursday at 2" | `$R edit <id> --when 'thursday 2pm'` — moves the whole reminder, and needs no lookup |
+| "Move just next Monday's standup to Tuesday" | `$R move <id> --instance '<that occurrence>' --to 'tuesday 9am'` — one occurrence of a **repeating** reminder only |
 | "Also send it to my email" | `$R edit <id> --via r,e` |
 | "Make it an hour instead of 30 minutes" | `$R edit <id> --duration 1h` |
 | "Call it 'Dentist checkup' instead" | `$R edit <id> --subject 'Dentist checkup'` |
@@ -285,7 +286,7 @@ underneath and is documented further down for reading, not for calling.
 | "Drop the reminder, keep the appointment" | `$R edit <id> --clear alerts` |
 | "Skip next Monday's standup" | `$R delete <id> --instance '2026-08-10 09:00'` — keeps the rest of the series |
 | "Stop the standup after this week" | `$R delete <id> --from '2026-08-17 09:00'` |
-| "Skip the next three Mondays" | one `--instance` delete only works **once** per record (below); read the tokens, delete, re-add with a comma-separated `@-` list |
+| "Skip the next three Mondays" | `$R delete <id> --instance '<a>, <b>, <c>'` — comma-separated, keeps the series and the id |
 
 ### Editing = one command
 
@@ -387,15 +388,24 @@ signature the error gives you and let a human decide.
 Never re-add a corrected copy and call it moved — that silently doubles the
 entry, and both copies will alert. Delete the original first.
 
-**Only one occurrence can be excluded per recurring record.** `delete
---instance` writes an exdate into the record (`@- 20260811T0900`); a *second*
-call on the same record is declined by tklr. To skip several occurrences, read
-the tokens with `details`, delete the record, and re-add with a
-**comma-separated** exdate list in a single token:
+**Skipping several occurrences is one command.** Give `--instance` a
+comma-separated list:
 
+```bash
+python3 $R delete 42 --instance '2026-08-10 09:00, 2026-08-17 09:00'
 ```
-@- 2026-08-11 9a, 2026-08-12 9a
-```
+
+Occurrences skipped earlier are carried over rather than replaced, so calling
+it again later adds to the list instead of un-skipping them. Each date is
+checked against the schedule first: one that is not an occurrence is refused,
+because writing it would report success and change nothing.
+
+Underneath, tklr can only exclude ONE occurrence per record — `delete
+--instance` writes `@- 20260811T0900`, and a second call is declined — so
+anything beyond the first is written as a whole-list token edit instead. That
+is a detail of the shim, not something to reason about: the reminder keeps its
+id, its history and its alert rows either way, and there is never a reason to
+delete and re-add a record to skip a date.
 
 Separate `@-` tokens are rejected — `@- <dt> @- <dt>` fails validation. The
 comma form is verified: both occurrences disappear from the series and the rest

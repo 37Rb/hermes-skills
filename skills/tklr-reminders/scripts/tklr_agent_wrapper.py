@@ -731,12 +731,103 @@ def cmd_delete(args, home: Path, now: datetime) -> int:
 
     extra = []
     if args.instance:
-        extra += ["--instance", resolve_when(args.instance, now)[0]]
+        wanted = [resolve_when(one, now)[0] for one in clean_list(args.instance)]
+        if not wanted:
+            die("--instance was given but named no occurrence")
+        # tklr's own delete_instance handles the FIRST skip on a record and
+        # validates the occurrence as it goes, so it stays the path for that
+        # case. It cannot do the second: with an `@-` already present it
+        # declines, which is why skipping several used to mean deleting the
+        # record and re-adding it with a hand-built `@-` list -- losing the id,
+        # the history and the alert rows to work around a limitation in one
+        # token.
+        entry = record_entry(home, args.id)
+        if len(wanted) == 1 and not has_token(entry, "-"):
+            extra += ["--instance", wanted[0]]
+        else:
+            return skip_occurrences(home, args.id, entry, wanted, now,
+                                    args.dry_run)
     if args.from_dt:
         extra += ["--from", resolve_when(args.from_dt, now)[0]]
     if args.dry_run:
         extra.append("--dry-run")
     return delegate("tklr_mutate.py", ["delete", str(args.id), *extra], home)
+
+
+def compact(resolved: str) -> str | None:
+    """'2026-08-10 09:00' -> '20260810T0900', the form tklr stores and `@-` takes."""
+    parsed = parse_resolved(resolved)
+    return parsed.strftime("%Y%m%dT%H%M") if parsed else None
+
+
+def occurrence_window(home: Path, rid: int) -> tuple[set[str], str | None]:
+    """Generated occurrences for a record, and the last one generated.
+
+    tklr materialises occurrences only inside a generation horizon, so an empty
+    result past the last one is not evidence the date is wrong -- which is why
+    the caller gets the horizon back rather than just the set.
+    """
+    import sqlite3
+    try:
+        conn = sqlite3.connect(home / "tklr.db", timeout=15)
+        rows = [r[0] for r in conn.execute(
+            "SELECT start_datetime FROM DateTimes WHERE record_id = ?", (rid,))]
+        conn.close()
+    except sqlite3.Error:
+        return set(), None
+    stored = {str(r)[:13] for r in rows if r}
+    return stored, (max(stored) if stored else None)
+
+
+def skip_occurrences(home: Path, rid: int, entry: str, wanted: list[str],
+                     now: datetime, dry_run: bool) -> int:
+    """Exclude one or more occurrences by writing the whole `@-` list at once.
+
+    Everything already excluded is carried over: `@-` is replaced wholesale by
+    the token edit, so building only the new dates would silently un-skip every
+    occurrence skipped before this call.
+    """
+    stored, horizon = occurrence_window(home, rid)
+    compacted: list[str] = []
+    for resolved in wanted:
+        one = compact(resolved)
+        if one is None:
+            die(f"could not read {resolved!r} as a date and time",
+                "An occurrence needs both, e.g. '2026-08-17 09:00'.")
+        # Silently adding a non-occurrence to `@-` would report success and
+        # change nothing, which is the failure this skill keeps meeting.
+        # Only inside the generated window, where absence is meaningful.
+        if stored and one not in stored and horizon and one <= horizon:
+            die(f"{resolved} is not an occurrence of id {rid}",
+                "Its occurrences are listed by: "
+                f"{sys.argv[0]} show {rid}",
+                "Name an occurrence exactly as it is scheduled.")
+        compacted.append(one)
+
+    already = [p.strip() for p in (token_value(entry, "-") or "").split(",")
+               if p.strip()]
+    merged = already + [c for c in compacted if c not in already]
+    if not merged:
+        die("nothing to skip")
+
+    rc = delegate("tklr_mutate.py",
+                  ["edit", str(rid), "--set", "@- " + ", ".join(merged)]
+                  + (["--dry-run"] if dry_run else []), home)
+    if rc != 0 or dry_run:
+        return rc
+
+    heal_alerts(home)
+    # Verified against the schedule, not against the token: the token is what
+    # was asked for, the schedule is what happened.
+    after, _ = occurrence_window(home, rid)
+    still = [c for c in compacted if c in after]
+    if still:
+        die(f"id {rid} still has {len(still)} of those occurrence(s) scheduled: "
+            + ", ".join(still),
+            "The entry was written but tklr did not drop them.")
+    print(f"  {len(compacted)} occurrence(s) skipped; "
+          f"{len(after)} still scheduled")
+    return 0
 
 
 def token_value(entry: str, key: str) -> str | None:
@@ -2177,7 +2268,10 @@ def main() -> int:
 
     dl = sub.add_parser("delete", help="remove a reminder or an occurrence")
     dl.add_argument("id", type=int)
-    dl.add_argument("--instance"); dl.add_argument("--from", dest="from_dt")
+    dl.add_argument("--instance",
+                    help="skip one occurrence, or several comma-separated. "
+                         "Keeps the rest of the series, and the id")
+    dl.add_argument("--from", dest="from_dt")
     dl.add_argument("--dry-run", action="store_true"); dl.set_defaults(fn=cmd_delete)
 
     e = sub.add_parser(

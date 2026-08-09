@@ -170,10 +170,9 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    every way possible: an alert described as "in 5 minutes" that fired 65
    minutes later, a tool "installed with pipx" that was installed with uv, a
    test that "passed" having sent nothing.
-8. **Configure alert channels before creating reminders that use them.** A
-   reminder written while its `@a` letter is undefined is stored as a draft, and
-   defining the letter afterwards does **not** fix it — you must re-create the
-   reminder. Check with `$R channels`.
+8. **Configure alert channels before creating reminders that use them.** `$R
+   channels` lists what exists. You do not have to remember this: `add` and
+   `edit` refuse an undefined letter and name the ones that are configured.
 9. **Confirm before destroying.** Deleting or rescheduling someone else's event,
    or anything ambiguous, gets a one-line check first.
 10. **You do not need to "heal" anything.** `$R` repairs tklr's stale-cache bug

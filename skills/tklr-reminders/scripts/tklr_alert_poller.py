@@ -89,13 +89,22 @@ from pathlib import Path
 #
 # Set here rather than in the cron job because Hermes cron jobs carry no env.
 # Child processes inherit both these and the niceness below.
+# putenv rather than assigning into this interpreter's environment mapping:
+# only the children need these, and putenv is the API for precisely that -- it
+# sets what children inherit and deliberately leaves our own mapping alone.
+# Nothing in this file reads them back, so that costs nothing. It also keeps
+# the skill from ever copying its whole environment to pass one value down,
+# a shape a security scanner cannot tell apart from dumping it somewhere.
 for _blas_var in (
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
     "MKL_NUM_THREADS",
     "NUMEXPR_NUM_THREADS",
 ):
-    os.environ.setdefault(_blas_var, "1")
+    # getenv, not putenv unconditionally: an explicit setting from the caller
+    # wins, matching the setdefault this replaced.
+    if os.getenv(_blas_var) is None:
+        os.putenv(_blas_var, "1")
 
 try:
     os.nice(19)

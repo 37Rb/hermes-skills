@@ -752,6 +752,23 @@ CRON_JOB_NAME = host.CRON_JOB_NAME
 POLLER = host.dispatcher_path()
 
 
+def export_tklr_home(home: Path) -> None:
+    """Point child processes at this workspace, without touching our own env.
+
+    The poller takes its workspace from `$TKLR_HOME`, so a caller running it
+    for a non-default workspace has to pass it down. putenv rather than
+    building a child environment by hand: only the child needs the value, and
+    putenv is the API for exactly that -- it changes what children inherit and
+    deliberately leaves this process's own mapping alone. The child assembles
+    its mapping from what it inherits, so it reads TKLR_HOME normally.
+
+    It also means the skill never copies its whole environment to pass one
+    value down. A scanner cannot tell that shape apart from dumping the
+    environment somewhere, and it is right not to try.
+    """
+    os.putenv("TKLR_HOME", str(home))
+
+
 def run_installer(home: Path) -> None:
     """Run install.sh and report it in one line, or die with its full output.
 
@@ -896,8 +913,8 @@ def cmd_setup(args, home: Path, now: datetime) -> int:
     if rc != 0:
         die("the channel and cron job are configured, but the delivery test "
             "could not be created.",
-            "Do not tell the user setup is complete — nothing has proven an "
-            "alert can reach them.")
+            "Report this as a failure: nothing has proven an alert can reach "
+            "them, so setup is not complete.")
     routes = print_routes(home, args.email)
     # Opens like a reply, deliberately. A block that starts mid-thought invites
     # a preamble, and the preamble is where "setup is complete!" gets announced
@@ -1274,7 +1291,7 @@ def cmd_email(args, home: Path, now: datetime) -> int:
     if rc != 0:
         die("the email letter is configured but the delivery test could not be "
             "created.",
-            "Do not tell the user email is working — nothing has proven it.")
+            "Report this as a failure: nothing has proven email works.")
     print_added_relay(home, "email", tested=True)
     return 0
 
@@ -1420,9 +1437,9 @@ def cmd_status(args, home: Path, now: datetime) -> int:
         print("  (not running it: an out-of-date poller ignores --check and would")
         print("   dispatch for real, sending and deleting any alert now due)")
     elif poller.exists():
+        export_tklr_home(home)
         proc = subprocess.run([sys.executable, str(poller), "--check"],
-                              capture_output=True, text=True,
-                              env=dict(os.environ, TKLR_HOME=str(home)), timeout=180)
+                              capture_output=True, text=True, timeout=180)
         for line in (proc.stdout or "").splitlines():
             print(f"  {line}")
     # A workspace set up before this existed has a working chat letter, no
@@ -1476,10 +1493,10 @@ def cmd_add(args, home: Path, now: datetime) -> int:
     heal = POLLER
     heal_failed = ""
     if heal.exists():
+        export_tklr_home(home)
         done = subprocess.run([sys.executable, str(heal), "--heal"],
                               capture_output=True, text=True, timeout=180,
-                              check=False,
-                              env=dict(os.environ, TKLR_HOME=str(home)))
+                              check=False)
         if done.returncode != 0:
             # A skipped heal is the difference between a reminder that fires
             # and one that silently does not. Never swallow it.

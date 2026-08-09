@@ -328,8 +328,8 @@ Then, and only then:
 1. **Send the `SEND EXACTLY THIS TO THE USER` block `setup` ends with, and
    nothing else.** It already asks about the test alert and offers the channels
    that have no letter yet — the two things this moment is for. `setup` created
-   the test alert; do not create another, and **do not tell the user setup is
-   complete until they confirm one reached them.**
+   the test alert; do not create another. **Setup counts as complete only once
+   they confirm one reached them, so wait for that before saying it worked.**
 
    Every command that ends in a message prints one of these blocks. Everything
    above the line is working notes, yours and not theirs.

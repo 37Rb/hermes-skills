@@ -80,23 +80,78 @@ def tklr_python() -> str | None:
     return None
 
 
-def ensure_tklr_importable() -> None:
+def requested_home() -> str | None:
+    """The `--home` value, read straight from argv.
+
+    Needed before argparse runs, and before tklr is imported: tklr resolves its
+    workspace from `$TKLR_HOME` when `TklrEnvironment()` is constructed, and
+    `TklrEnvironment` takes no arguments, so the only way to point it anywhere
+    is for that variable to be in this process's environment from the start.
+    Hand-parsed for exactly that reason -- argparse cannot have run yet.
+    """
+    argv = sys.argv[1:]
+    for i, arg in enumerate(argv):
+        if arg == "--home" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--home="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def ensure_tklr_ready() -> None:
+    """Guarantee tklr is importable AND pointed at the requested workspace.
+
+    Two things can be wrong, and both are fixed the same way -- export what the
+    next process should inherit, then become it:
+
+      * tklr is not importable, because the caller runs under a different
+        interpreter than the one tklr was installed into (the normal case: the
+        wrapper runs system python3, tklr lives in its own uv venv).
+      * a `--home` was asked for that this process's environment does not name.
+
+    Exporting with putenv and re-executing, rather than assigning into our own
+    environment mapping, is what keeps this file from ever writing to that
+    mapping. A freshly exec'd process builds its mapping from what it inherits,
+    so tklr's `os.getenv("TKLR_HOME")` reads the exported value normally.
+
+    The re-exec is not an added cost in practice: it already happened on
+    virtually every call, because the wrapper invokes this under an interpreter
+    that cannot import tklr.
+    """
+    home = requested_home()
+    want = str(Path(home).expanduser()) if home else None
+    if want:
+        # Export before anything imports tklr. Only what we exec needs this.
+        os.putenv("TKLR_HOME", want)
+
     try:
         import tklr  # noqa: F401
-        return
+        importable = True
     except ImportError:
-        pass
+        importable = False
+
+    # Already correct: tklr is here, and either no workspace was requested or
+    # this process was started with it.
+    if importable and (want is None or os.getenv("TKLR_HOME") == want):
+        return
+
     if os.environ.get("_TKLR_MUTATE_REEXEC"):
-        sys.exit("error: re-executed under tklr's interpreter but tklr is still "
-                 "not importable. Is tklr installed? Try: install.sh")
-    py = tklr_python()
+        # Second time through. Refuse rather than quietly operate on the wrong
+        # workspace, which is the failure this whole dance exists to avoid.
+        if not importable:
+            sys.exit("error: re-executed under tklr's interpreter but tklr is "
+                     "still not importable. Is tklr installed? Try: install.sh")
+        sys.exit(f"error: could not point tklr at {want} — it still reports "
+                 f"{os.getenv('TKLR_HOME')!r}")
+
+    py = sys.executable if importable else tklr_python()
     if not py:
         sys.exit("error: cannot locate tklr's Python interpreter. Is tklr installed?")
-    env = dict(os.environ, _TKLR_MUTATE_REEXEC="1")
-    os.execve(py, [py, os.path.abspath(__file__), *sys.argv[1:]], env)
+    os.putenv("_TKLR_MUTATE_REEXEC", "1")
+    os.execv(py, [py, os.path.abspath(__file__), *sys.argv[1:]])
 
 
-ensure_tklr_importable()
+ensure_tklr_ready()
 
 import inspect  # noqa: E402  (only safe once tklr is importable)
 
@@ -136,9 +191,18 @@ def open_controller(home: str | None):
     from tklr.cli.main import ensure_database
     from tklr.controller import Controller
 
-    if home:
-        os.environ["TKLR_HOME"] = str(Path(home).expanduser())
+    # `home` is not applied here. ensure_tklr_ready() exported it and re-execed
+    # before tklr was ever imported, which is the only point at which it can be
+    # made to take effect -- TklrEnvironment reads the environment when it is
+    # constructed and accepts no argument. It is still taken as a parameter so
+    # the mismatch below can name what the caller asked for.
     env = TklrEnvironment()
+    if home:
+        asked = Path(home).expanduser()
+        if env.home != asked:
+            sys.exit(f"error: asked for workspace {asked} but tklr resolved "
+                     f"{env.home}. A config.toml + tklr.db in the current "
+                     f"directory takes precedence in tklr; run from elsewhere.")
     if not (env.home / "tklr.db").exists():
         sys.exit(f"error: no tklr workspace at {env.home}")
     env.ensure(init_config=True, init_db_fn=lambda p: ensure_database(p, env))

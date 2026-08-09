@@ -85,9 +85,10 @@ else
         warn "If it is there, point this script at it:"
         warn "  UV=${HERMES_HOME:-$HOME/.hermes}/bin/uv bash install.sh"
         warn ""
-        warn "Otherwise install uv — it brings its own Python and needs none to"
-        warn "bootstrap, so this works on a machine with no Python at all:"
-        warn "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+        warn "Otherwise install uv by whichever method its docs recommend for"
+        warn "this machine — it brings its own Python and needs none to"
+        warn "bootstrap, so it works where no Python is installed at all:"
+        warn "  https://docs.astral.sh/uv/getting-started/installation/"
         warn "then re-run this script."
         exit 1
     fi

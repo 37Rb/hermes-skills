@@ -644,20 +644,91 @@ def delegate(script: str, argv: list[str], home: Path) -> int:
     return proc.returncode
 
 
+# EVERY datetime handed to tklr_mutate goes through resolve_when first, not just
+# the new one. tklr matches an occurrence by exact datetime -- `delete_instance`
+# and `reschedule_instance` take the text and return a bool -- so an unresolved
+# "tomorrow 2pm" reaches it as those literal words and is simply declined, which
+# read as "tklr cannot reschedule" rather than "this layer forgot to do its job".
+# That was the bug: `--to` was resolved and `--instance` beside it was not.
+# resolve_when is idempotent, so a caller that already passes '2026-08-09 14:00'
+# is unaffected.
 def cmd_delete(args, home: Path, now: datetime) -> int:
     extra = []
     if args.instance:
-        extra += ["--instance", args.instance]
+        extra += ["--instance", resolve_when(args.instance, now)[0]]
     if args.from_dt:
-        extra += ["--from", args.from_dt]
+        extra += ["--from", resolve_when(args.from_dt, now)[0]]
     if args.dry_run:
         extra.append("--dry-run")
     return delegate("tklr_mutate.py", ["delete", str(args.id), *extra], home)
 
 
+def record_entry(home: Path, rid: int) -> str:
+    """The record's entry text from `tklr details`, joined into one line.
+
+    `details` prints the entry first, wrapped over as many lines as it needs,
+    then a blank line, then `rruleset:` and the id/cr/md footer. Joined here so
+    a token check does not depend on where tklr happened to wrap.
+    """
+    proc = run_tklr(home, "details", str(rid))
+    entry: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        if line.startswith(("rruleset:", "id/cr/md:")):
+            break
+        if not line.strip():
+            if entry:
+                break          # blank line AFTER the entry ends it
+            continue           # leading blank line before it
+        entry.append(line.strip())
+    return " ".join(entry)
+
+
+def has_token(entry: str, key: str) -> bool:
+    """Is `@<key>` present as a token, rather than as text inside a subject?"""
+    return re.search(rf"(?:^|\s)@{re.escape(key)}(?:\s|$)", entry) is not None
+
+
 def cmd_move(args, home: Path, now: datetime) -> int:
+    # REFUSED for a non-recurring reminder, because tklr would not move it, it
+    # would duplicate it. Controller.reschedule_instance appends
+    # `@- <old> @+ <new>` to the entry and nothing else. With an `@r` present
+    # tklr renders those as EXDATE + RDATE and the move is correct; with no
+    # `@r` the old time comes from `@s`/DTSTART, no EXDATE is produced, and the
+    # reminder ends up on the schedule at BOTH times. Measured on tklr 1.0.43:
+    # rruleset became `RDATE:<old>, <new>`.
+    #
+    # Checked BEFORE the call, not after, so there is no duplicate to clean up.
+    # An empty entry (unreadable record) falls through: tklr_mutate reports a
+    # missing id better than a guard can.
+    entry = record_entry(home, args.id)
+    if entry and not has_token(entry, "r"):
+        detail = []
+        if has_token(entry, "+"):
+            detail.append("This reminder also carries explicit extra dates "
+                          "(@+), which deleting it would remove as well — say "
+                          "so rather than silently dropping them.")
+        die(f"tklr cannot move one occurrence of a non-recurring reminder "
+            f"(id {args.id}) — it would appear at BOTH the old and new time.",
+            "This is a defect in tklr 1.0.43, not in the reminder. Recurring "
+            "reminders move correctly; this one has no @r.",
+            *detail,
+            "Do this instead: delete it, then add it again at the new time.",
+            f"  {sys.argv[0]} delete {args.id}",
+            "  then `add` with the same subject and details and the new --when.",
+            "Do NOT send the user to `tklr ui` — its Reschedule has the same "
+            "defect, since it calls the same function.")
+
+    instance, instance_had_time = resolve_when(args.instance, now)
     to_when, _ = resolve_when(args.to, now)
-    extra = ["--instance", args.instance, "--to", to_when]
+    # A timed occurrence cannot be named by date alone, and tklr's refusal does
+    # not say so. Caught here because it is the one mismatch with an obvious
+    # cause: "move tomorrow's 3pm dentist" resolves --to fine and leaves
+    # --instance as a bare date.
+    if not instance_had_time:
+        print(f"note: --instance {instance} names a whole day. If that "
+              "occurrence has a time, include it or tklr will not match it.",
+              file=sys.stderr)
+    extra = ["--instance", instance, "--to", to_when]
     if args.dry_run:
         extra.append("--dry-run")
     return delegate("tklr_mutate.py", ["reschedule", str(args.id), *extra], home)

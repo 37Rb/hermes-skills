@@ -42,10 +42,14 @@ from pathlib import Path
 TESTED_AGAINST = "1.0.43"  # informational only; not enforced
 
 UI_FALLBACK = (
-    "Workaround: the interactive UI can do this — run `tklr ui`, select the\n"
-    "  reminder, and delete or reschedule it there. That is the only other\n"
-    "  place tklr exposes these operations. Then tell whoever maintains this\n"
-    "  skill that tklr's internals moved, so the shim can be updated."
+    "Workaround: the interactive UI is the only other place tklr exposes these\n"
+    "  operations — run `tklr ui` and select the reminder. For DELETE that is a\n"
+    "  genuine fallback. For RESCHEDULE of a reminder with no `@r` it is NOT:\n"
+    "  view.py's Reschedule calls the same reschedule_instance, which appends\n"
+    "  `@- old @+ new` and produces no EXDATE without an `@r`, so the reminder\n"
+    "  ends up at BOTH times (tklr 1.0.43). Delete it and re-add it at the new\n"
+    "  time instead. Then tell whoever maintains this skill that tklr's\n"
+    "  internals moved, so the shim can be updated."
 )
 
 

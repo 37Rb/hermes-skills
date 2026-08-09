@@ -28,7 +28,7 @@ metadata:
         and hand-written steps here have repeatedly been copied into live
         setups in place of it.
 
-        1. python3 ~/.hermes/skills/productivity/tklr-reminders/scripts/tklr_agent_wrapper.py status
+        1. python3 "$(cat ~/.hermes/scripts/tklr-wrapper-path)" status
            It is read-only. It reports the workspace, the channel letters, the
            dispatcher (including whether the deployed copy has drifted behind
            the skill), and whether the cron job is scheduled.
@@ -61,7 +61,7 @@ Both replace a judgment call that has gone wrong in live use every time it was
 left to prose. Run them; do not reason your way to something else.
 
 ```bash
-R=~/.hermes/skills/productivity/tklr-reminders/scripts/tklr_agent_wrapper.py
+R=${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py
 
 python3 $R setup --platform <the platform this conversation is on>
 python3 $R welcome
@@ -136,9 +136,14 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    up — "remind Amanda too" is a fine reason to use the name. Memory supplying
    the name is not.
 3. **Everything goes through `$R`. Never call `tklr` yourself.** Subcommands:
-   `add`, `list`, `show`, `find`, `free`, `done`, `delete`, `move`, `uses`,
-   `channels`, `status`, `setup`, `email`, `welcome`. `python3 $R --help` lists
-   them.
+   `add`, `edit`, `list`, `show`, `find`, `free`, `done`, `delete`, `move`,
+   `uses`, `channels`, `status`, `setup`, `email`, `welcome`. `python3 $R --help`
+   lists them.
+
+   **To change an existing reminder, use `edit`.** Never delete and re-add it:
+   that is how the same reminder ends up on the schedule twice, and it throws
+   away the id and the completion history. `edit` changes only the fields you
+   name.
 
    Calling `tklr` directly is how every silent failure in this skill has
    happened: a missing itemtype character becomes a draft, `tomorrow 3p` is
@@ -147,7 +152,7 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    assembles the grammar, validates, reads the output, refuses drafts, and
    heals.
 4. **Load `references/using-the-wrapper.md` before composing any command.**
-   The flags, the worked examples, and the edit-safely procedure live there,
+   The flags, the worked examples, and what each subcommand covers live there,
    deliberately not here — so that paste-shaped command examples are in front
    of you when you are writing a command, and nowhere near you when you are
    writing to the user.
@@ -289,7 +294,7 @@ takes a subcommand as its first argument. Running it without one is the single
 most common mistake made with this skill:
 
 ```bash
-R=<skill directory>/scripts/tklr_agent_wrapper.py
+R=${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py
 
 python3 $R --help          # right — lists the subcommands
 python3 $R --type event …  # WRONG — no subcommand; argparse rejects it

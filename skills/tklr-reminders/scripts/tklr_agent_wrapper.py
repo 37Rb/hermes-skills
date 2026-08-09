@@ -51,8 +51,12 @@ What it does that raw tklr does not:
     thing, and the gap between them is where every past failure has lived
   * reports the id, the entry as stored, and when each alert will fire
 
-Workspace: --home, else $TKLR_HOME, else ~/.config/tklr. Only pass --home for
-a non-default workspace.
+Workspace: --home, else $TKLR_HOME, else ~/.config/tklr. Do not pass --home.
+`setup` refuses it outright, because `tklr` in a terminal and the dispatcher
+under the scheduler both resolve the workspace themselves and cannot be told
+to look elsewhere -- a workspace they do not resolve is never polled and never
+delivers. It exists for reading and testing against a scratch copy. To move
+the workspace for real, set TKLR_HOME or XDG_CONFIG_HOME for everything.
 
 Exit codes: 0 success, 1 refused or failed, 2 usage error.
 Alerts are delivered separately, by tklr_alert_poller.py running once a minute
@@ -287,6 +291,66 @@ def tklr_home(explicit: str | None) -> Path:
     if xdg:
         return (Path(xdg).expanduser() / "tklr")
     return Path.home() / ".config" / "tklr"
+
+
+def write_workspace_pin(home: Path) -> str:
+    """Record the workspace for the dispatcher. Returns '' or why it failed.
+
+    Not fatal on failure: the dispatcher falls back to resolving the workspace
+    itself, which is what it did before the pin existed and is usually the same
+    answer. The caller reports the reason rather than dying, because a setup
+    that configured everything else correctly should not be reported as failed.
+    """
+    try:
+        pin = host.workspace_pin_path()
+        pin.parent.mkdir(parents=True, exist_ok=True)
+        pin.write_text(f"{home}\n", encoding="utf-8")
+    except (OSError, host.HostError) as exc:
+        return str(exc)
+    return ""
+
+
+def tklr_own_home() -> Path | None:
+    """Where tklr itself resolves the workspace, asked rather than mirrored.
+
+    Runs in a subprocess with a clean TKLR_HOME so the answer is the one a
+    person typing `tklr` gets, not the one this process arranged. Returns None
+    when tklr cannot be imported, which is not an error here: the caller is
+    reporting drift, and "could not check" is not "drifted".
+
+    Asked rather than recomputed because tklr's rules include a clause nothing
+    else implements -- a config.toml and tklr.db in the current directory
+    outrank $TKLR_HOME -- and because a mirrored copy of someone else's
+    resolution order silently goes stale when they change it.
+    """
+    exe = shutil.which("tklr")
+    if not exe:
+        return None
+    # tklr's own interpreter, not this one: the wrapper runs under an
+    # interpreter that cannot import tklr at all. Resolving the shim lands in
+    # the tool's bin directory, whose `python` is the venv tklr was installed
+    # into -- true of a uv tool install and of a pipx one alike.
+    python = Path(exe).resolve().parent / "python"
+    if not python.exists():
+        return None
+    env = {k: v for k, v in os.environ.items() if k != "TKLR_HOME"}
+    code = ("from tklr.tklr_env import TklrEnvironment;"
+            "print(TklrEnvironment().home)")
+    try:
+        # From the user's home directory, because tklr's first rule is that a
+        # config.toml plus tklr.db in the CURRENT directory outrank everything.
+        # Run from wherever the agent happens to be, this would report that
+        # directory. A neutral cwd gives the answer a terminal usually gets;
+        # the cwd clause itself cannot be predicted from here.
+        proc = subprocess.run([str(python), "-c", code], env=env,
+                              cwd=str(Path.home()),
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = (proc.stdout or "").strip().splitlines()
+    if proc.returncode != 0 or not out:
+        return None
+    return Path(out[-1]).expanduser()
 
 
 def run_tklr(home: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -653,6 +717,18 @@ def delegate(script: str, argv: list[str], home: Path) -> int:
 # resolve_when is idempotent, so a caller that already passes '2026-08-09 14:00'
 # is unaffected.
 def cmd_delete(args, home: Path, now: datetime) -> int:
+    # An empty --instance/--from is a REFUSAL, never a fall-through. `if
+    # args.instance:` reads "" as absent, so `delete 3 --instance ''` used to
+    # skip the flag entirely and delete the WHOLE reminder -- the caller asked
+    # to drop one occurrence and lost the series, unrecoverably. A lookup that
+    # produced nothing is exactly how a caller arrives here with "".
+    for flag, value in (("--instance", args.instance), ("--from", args.from_dt)):
+        if value is not None and not str(value).strip():
+            die(f"{flag} was given but empty",
+                "Name the occurrence, or leave the flag off entirely to delete "
+                "the whole reminder. Refusing to guess which you meant, because "
+                "one of them cannot be undone.")
+
     extra = []
     if args.instance:
         extra += ["--instance", resolve_when(args.instance, now)[0]]
@@ -663,23 +739,279 @@ def cmd_delete(args, home: Path, now: datetime) -> int:
     return delegate("tklr_mutate.py", ["delete", str(args.id), *extra], home)
 
 
+def token_value(entry: str, key: str) -> str | None:
+    """The value of `@<key>` in an entry, or None when the token is absent.
+
+    Reads up to the next ` @` so a value containing spaces (`@a 1d, 1h: r, e`)
+    comes back whole.
+    """
+    match = re.search(rf"(?:^|\s)@{re.escape(key)}\s+(.*?)(?=\s+@|$)", entry)
+    return match.group(1).strip() if match else None
+
+
+def split_alert_token(value: str | None) -> tuple[list[str], list[str]]:
+    """`'1d, 1h: r, e'` -> (['1d','1h'], ['r','e']). Missing half comes back []."""
+    if not value:
+        return [], []
+    offsets, _, letters = value.partition(":")
+    return clean_list(offsets), clean_list(letters)
+
+
+# Which flag edits which tklr token. Single source of truth for `edit`, so a
+# flag can never quietly map to a different token here than the validator below
+# assumes. `d` (description) is last in tklr's grammar; the shim handles that.
+EDITABLE = {
+    "subject": None,        # not an @ token; handled separately
+    "when": "s",
+    "duration": "e",
+    "repeat": "r",
+    "location": "l",
+    "priority": "p",
+    "notice": "n",
+    "offset": "o",
+    "travel": "w",
+    "note": "d",
+    "for_whom": "b",
+    "alert": "a",           # --alert and --via both compose the one @a token
+    "via": "a",
+}
+
+# What the user may name in --clear, in their words rather than tklr's letters.
+CLEARABLE = {
+    "duration": "e", "repeat": "r", "location": "l", "priority": "p",
+    "notice": "n", "offset": "o", "travel": "w", "note": "d",
+    "people": "b", "alerts": "a", "alert": "a",
+}
+
+
+def cmd_edit(args, home: Path, now: datetime) -> int:
+    """Change an existing reminder in place, keeping its id and its history.
+
+    Every flag is optional and only what is named changes. This is the whole
+    reason the command exists: the alternative the skill used to document was
+    delete-and-re-add, which loses the id, the completion history, pinned state
+    and tags, and which leaves nothing behind if the re-add is refused.
+    """
+    entry = record_entry(home, args.id)
+    if not entry:
+        die(f"no reminder with id {args.id}",
+            f"Find the right id with: {sys.argv[0]} find <text>")
+
+    sets: list[str] = []
+    removes: list[str] = []
+
+    # --- clear first, so `--clear alerts --via r` is an explicit replacement
+    for name in clean_list(args.clear):
+        key = CLEARABLE.get(name.lower())
+        if key is None:
+            die(f"cannot clear {name!r}",
+                "Nameable: " + ", ".join(sorted(set(CLEARABLE))))
+        removes.append(key)
+
+    resolved = has_time = None
+    if args.when:
+        resolved, has_time = resolve_when(args.when, now)
+        stamp_text = resolved
+        if args.timezone:
+            tz = args.timezone.strip()
+            if not re.fullmatch(r"[A-Za-z_]+(/[A-Za-z_+-]+)*|none|float", tz):
+                die(f"--timezone {tz!r} does not look like a zone name",
+                    "Use e.g. US/Pacific, Europe/London, or 'none' for a floating time.")
+            stamp_text = f"{resolved} z {tz}"
+        sets.append(f"@s {stamp_text}")
+    elif args.timezone:
+        die("--timezone only means something together with --when")
+
+    if args.duration:
+        if not re.fullmatch(r"(\d+[wdhms])+", args.duration.strip()):
+            die(f"--duration {args.duration!r} is not a timeperiod",
+                "Use forms like 30m, 1h, 1h30m, 2d.")
+        sets.append(f"@e {args.duration.strip()}")
+
+    if args.repeat:
+        sets.append(f"@r {args.repeat.strip()}")
+
+    if args.location:
+        sets.append(f"@l {args.location.strip()}")
+
+    if args.priority:
+        if args.priority not in range(1, 6):
+            die("--priority must be 1 (highest) to 5 (lowest)")
+        sets.append(f"@p {args.priority}")
+
+    if args.notice:
+        sets.append(f"@n {args.notice.strip()}")
+
+    if args.offset:
+        off = args.offset.strip()
+        if not re.fullmatch(r"~?(\d+[wdhms])+", off):
+            die(f"--offset {off!r} is not a timeperiod",
+                "Use e.g. 3d. Prefix with ~ for a learning interval: ~3d.")
+        sets.append(f"@o {off}")
+
+    if args.travel:
+        legs = clean_list(args.travel)
+        if len(legs) == 1:
+            legs = legs * 2
+        if len(legs) != 2 or not all(re.fullmatch(r"(\d+[wdhms])+", l) for l in legs):
+            die(f"--travel {args.travel!r} needs one or two timeperiods",
+                "e.g. --travel 30m or --travel 30m,15m (before,after).")
+        sets.append(f"@w {legs[0]}, {legs[1]}")
+
+    if args.for_whom:
+        for person in clean_list(args.for_whom):
+            sets.append(f"@b {person.lower()}/users")
+
+    # --- alerts: the half that was not given is carried over from the record.
+    # "Send it to email as well" names channels and nothing else, and that must
+    # not silently reset the offsets the user already chose. This is the exact
+    # request that produced a duplicate reminder before `edit` existed.
+    if args.alert or args.via:
+        was_offsets, was_letters = split_alert_token(token_value(entry, "a"))
+        offsets = clean_list(args.alert) or was_offsets
+        letters = clean_list(args.via) or was_letters
+        if not offsets:
+            start = resolved if args.when else token_value(entry, "s")
+            offsets = ["1h"] if (has_time if args.when else True) else ["1d"]
+            warnings.append(f"no alert offset on this reminder yet; used "
+                            f"{offsets[0]} before it")
+            del start
+        if not letters:
+            die("this reminder has no channel to alert on",
+                "Pass --via with the letter(s) to use. Configured: "
+                + (", ".join(sorted(configured_letters(home))) or "none"))
+        available = configured_letters(home)
+        unknown = [l for l in letters if l not in available]
+        if unknown:
+            die(f"channel letter(s) not configured: {', '.join(unknown)}",
+                "Available: " + (", ".join(sorted(available)) or "none"),
+                "Add one with scripts/set_alert_channel.py before using it.")
+        for off in offsets:
+            if not re.fullmatch(r"-?(\d+[wdhms])+", off):
+                die(f"--alert offset {off!r} is not a timeperiod",
+                    "Offsets count BACK from the start time: 1d, 2h, 15m.")
+        # Margin is measured against the start this record will HAVE after the
+        # edit, which is the new one when --when moved it.
+        check_alert_margin(offsets, resolved or token_value(entry, "s"), now, warnings)
+        sets.append(f"@a {', '.join(offsets)}: {', '.join(letters)}")
+        removes = [k for k in removes if k != "a"]      # replaced, not cleared
+
+    if args.note:
+        sets.append(f"@d {' '.join(args.note.split())}")
+
+    if not sets and not removes and args.subject is None:
+        die("nothing to change",
+            "Name at least one of --subject, --when, --duration, --alert, --via, "
+            "--for, --note, --location, --priority, --notice, --offset, "
+            "--travel, --repeat, or --clear <field>.")
+
+    for w in warnings:
+        print(f"  note: {w}")
+
+    argv = ["edit", str(args.id)]
+    if args.subject is not None:
+        subject = " ".join(args.subject.split())
+        if not subject:
+            die("--subject cannot be empty")
+        if '"' in subject:
+            print('  note: a double quote in the subject can break alert '
+                  'delivery; replaced with a typographic quote')
+            subject = subject.replace('"', "”")
+        argv += ["--subject", subject]
+    for spec in sets:
+        argv += ["--set", spec]
+    for key in removes:
+        argv += ["--remove", key]
+    if args.dry_run:
+        argv.append("--dry-run")
+
+    rc = delegate("tklr_mutate.py", argv, home)
+    if rc != 0 or args.dry_run:
+        return rc
+
+    # Saving regenerates the derived tables and tklr keeps only FUTURE alerts,
+    # so an edit can consume an alert that was about to fire. Verify rather than
+    # assume, exactly as `add` does.
+    heal_alerts(home)
+    verify_after_edit(home, args.id, now)
+    return 0
+
+
+def heal_alerts(home: Path) -> str:
+    """Run the dispatcher's rebuild-only mode. Returns '' or why it failed."""
+    if not POLLER.exists():
+        return ""
+    export_tklr_home(home)
+    done = subprocess.run([sys.executable, str(POLLER), "--heal"],
+                          capture_output=True, text=True, timeout=180, check=False)
+    if done.returncode == 0:
+        return ""
+    tail = (done.stdout or done.stderr or "").strip().splitlines()
+    return tail[-1] if tail else "heal returned non-zero"
+
+
+def verify_after_edit(home: Path, rid: int, now: datetime) -> None:
+    """Say what the record looks like now, and whether its alerts still stand."""
+    entry = record_entry(home, rid)
+    offsets, letters = split_alert_token(token_value(entry, "a"))
+    if not offsets:
+        print("  this reminder has no alert, so nobody will be notified")
+        return
+
+    import sqlite3
+    try:
+        conn = sqlite3.connect(home / "tklr.db", timeout=15)
+        rows = conn.execute(
+            "SELECT alert_name, trigger_datetime FROM Alerts WHERE record_id = ?",
+            (rid,)).fetchall()
+        conn.close()
+    except sqlite3.Error:
+        rows = []
+
+    expected = len(offsets) * len(letters)
+    if rows:
+        print(f"  verified: {len(rows)} alert(s) queued"
+              + ("" if len(rows) == expected
+                 else f" (expected {expected}; the rest are past or beyond the horizon)"))
+    else:
+        start = parse_resolved(token_value(entry, "s"))
+        if start and start > now:
+            print("  verified: on the schedule; alerts are beyond tklr's "
+                  "generation horizon and will be created closer to the time")
+        else:
+            print("  WARNING: no alert is queued and the start time has passed — "
+                  "nobody will be notified")
+
+
 def record_entry(home: Path, rid: int) -> str:
     """The record's entry text from `tklr details`, joined into one line.
 
     `details` prints the entry first, wrapped over as many lines as it needs,
     then a blank line, then `rruleset:` and the id/cr/md footer. Joined here so
     a token check does not depend on where tklr happened to wrap.
+
+    Collection starts at the first line beginning with an itemtype character
+    rather than at the first non-blank line, because tklr prefixes its output
+    with warnings ("No data to aggregate", "No event DateTimes entries") in a
+    workspace that has little in it. Taking the first non-blank line returned
+    that warning AS the entry, which made every token lookup fail: `move`'s
+    `@r` guard then refused every reschedule, and an alert carried over as
+    absent. A new user's workspace is exactly the sparse case that triggers it.
     """
     proc = run_tklr(home, "details", str(rid))
+    starts = tuple(ITEMTYPE.values()) + ("?",)   # `?` so a draft still reads
     entry: list[str] = []
     for line in (proc.stdout or "").splitlines():
         if line.startswith(("rruleset:", "id/cr/md:")):
             break
-        if not line.strip():
-            if entry:
-                break          # blank line AFTER the entry ends it
-            continue           # leading blank line before it
-        entry.append(line.strip())
+        stripped = line.strip()
+        if not entry:
+            if stripped.startswith(starts):
+                entry.append(stripped)
+            continue                      # skip chatter and leading blanks
+        if not stripped:
+            break                         # blank line AFTER the entry ends it
+        entry.append(stripped)
     return " ".join(entry)
 
 
@@ -700,23 +1032,33 @@ def cmd_move(args, home: Path, now: datetime) -> int:
     # Checked BEFORE the call, not after, so there is no duplicate to clean up.
     # An empty entry (unreadable record) falls through: tklr_mutate reports a
     # missing id better than a guard can.
+    for flag, value in (("--instance", args.instance), ("--to", args.to)):
+        if value is not None and not str(value).strip():
+            die(f"{flag} was given but empty", "Name the datetime it should use.")
+
     entry = record_entry(home, args.id)
     if entry and not has_token(entry, "r"):
-        detail = []
+        # A reminder with no `@r` has exactly ONE occurrence, so moving that
+        # occurrence and changing `@s` are the same operation. Route it through
+        # the same in-place token edit `edit --when` uses: correct, keeps the id
+        # and the history, and needs nothing from reschedule_instance.
+        #
+        # This used to refuse and tell the caller to delete and re-add. The
+        # refusal was right about tklr (reschedule_instance appends `@- old
+        # @+ new` and, with no `@r` to turn those into EXDATE + RDATE, leaves
+        # the reminder on the schedule at BOTH times, measured on 1.0.43) but
+        # wrong to make that tklr's defect the caller's problem. There is no
+        # reason the user should hear about `@r` at all.
         if has_token(entry, "+"):
-            detail.append("This reminder also carries explicit extra dates "
-                          "(@+), which deleting it would remove as well — say "
-                          "so rather than silently dropping them.")
-        die(f"tklr cannot move one occurrence of a non-recurring reminder "
-            f"(id {args.id}) — it would appear at BOTH the old and new time.",
-            "This is a defect in tklr 1.0.43, not in the reminder. Recurring "
-            "reminders move correctly; this one has no @r.",
-            *detail,
-            "Do this instead: delete it, then add it again at the new time.",
-            f"  {sys.argv[0]} delete {args.id}",
-            "  then `add` with the same subject and details and the new --when.",
-            "Do NOT send the user to `tklr ui` — its Reschedule has the same "
-            "defect, since it calls the same function.")
+            print("note: this reminder carries explicit extra dates (@+); "
+                  "only its start time is being moved, they are left alone.",
+                  file=sys.stderr)
+        edit_args = argparse.Namespace(
+            id=args.id, when=args.to, dry_run=args.dry_run,
+            subject=None, duration=None, for_whom=None, alert=None, via=None,
+            note=None, location=None, priority=None, notice=None, timezone=None,
+            offset=None, travel=None, repeat=None, clear=None)
+        return cmd_edit(edit_args, home, now)
 
     instance, instance_had_time = resolve_when(args.instance, now)
     to_when, _ = resolve_when(args.to, now)
@@ -963,6 +1305,16 @@ def cmd_setup(args, home: Path, now: datetime) -> int:
     if rc != 0:
         return rc
     print(f"\nalert channel '{args.letter}' delivers to {target}.")
+
+    # Before the cron job, not after: the job is the thing that reads this, so
+    # scheduling it while the workspace is unrecorded creates the one state
+    # this is meant to prevent, however briefly.
+    pin_failed = write_workspace_pin(home)
+    if pin_failed:
+        print(f"  note: could not record the workspace ({pin_failed});")
+        print(f"        the dispatcher will resolve it itself, which is right "
+              f"only while nothing sets TKLR_HOME or XDG_CONFIG_HOME "
+              f"differently for it")
 
     ok, note = ensure_cron_job()
     print(f"dispatcher: {note}")
@@ -1482,8 +1834,45 @@ def cmd_welcome(args, home: Path, now: datetime) -> int:
     return 0
 
 
+def report_workspace_agreement(home: Path) -> None:
+    """Say whether the three things that resolve the workspace still agree.
+
+    Three parties each pick a workspace, in environments that differ: this
+    process, the dispatcher under the scheduler, and `tklr` in the user's
+    terminal. When they disagree, every individual report still says success --
+    reminders save, alerts queue, the dispatcher runs cleanly -- and nothing
+    is ever delivered. That is the failure this whole check exists to make
+    visible, because it has no other symptom.
+    """
+    try:
+        pin = host.workspace_pin_path()
+        recorded = pin.read_text(encoding="utf-8").strip()
+    except (OSError, host.HostError):
+        recorded = ""
+
+    if not recorded:
+        print("  dispatcher workspace: NOT RECORDED — it resolves its own, which")
+        print("    differs from this one whenever the scheduler's environment does.")
+        print("    Run setup to record it.")
+    elif Path(recorded).expanduser() != home:
+        print(f"  dispatcher workspace: {recorded}")
+        print("    MISMATCH — the dispatcher polls that one; this command is")
+        print("    using the one above. Alerts created here are never sent.")
+        print("    Run setup without --home to correct it.")
+
+    mine = tklr_own_home()
+    if mine is None:
+        print("  `tklr` by hand: could not ask tklr where it looks")
+    elif mine != home:
+        print(f"  `tklr` by hand: {mine}")
+        print("    MISMATCH — a person typing `tklr` sees a different workspace")
+        print("    than the agent uses. Usually TKLR_HOME or XDG_CONFIG_HOME set")
+        print("    for one and not the other.")
+
+
 def cmd_status(args, home: Path, now: datetime) -> int:
     print(f"workspace: {home}")
+    report_workspace_agreement(home)
     letters = configured_letters(home)
     print(f"channels:  {', '.join(sorted(letters)) if letters else 'NONE — alerts cannot be created'}")
     poller = POLLER
@@ -1693,8 +2082,8 @@ def main() -> int:
             "  minute from the host agent's scheduler and sends what is due.\n"
             "\n"
             "workspace:\n"
-            "  --home, else $TKLR_HOME, else ~/.config/tklr. Only pass --home for a\n"
-            "  non-default workspace.\n"
+            "  --home, else $TKLR_HOME, else ~/.config/tklr. Do not pass --home:\n"
+            "  `setup` refuses it, and a workspace anywhere else is never polled.\n"
             "\n"
             "exit codes: 0 success, 1 refused or failed, 2 usage error.\n"))
     ap.add_argument("--home", help="tklr workspace (default $TKLR_HOME or ~/.config/tklr)")
@@ -1791,6 +2180,39 @@ def main() -> int:
     dl.add_argument("--instance"); dl.add_argument("--from", dest="from_dt")
     dl.add_argument("--dry-run", action="store_true"); dl.set_defaults(fn=cmd_delete)
 
+    e = sub.add_parser(
+        "edit",
+        help="change an existing reminder, keeping its id and history",
+        description="Change one or more details of a reminder that already "
+                    "exists. Only what you name changes; everything else is "
+                    "left exactly as it is. Use this instead of deleting and "
+                    "re-adding — the id, the completion history and the alert "
+                    "rows all survive an edit and none of them survive a "
+                    "replacement.")
+    e.add_argument("id", type=int)
+    e.add_argument("--subject", help="new wording")
+    e.add_argument("--when", help="new start, e.g. 'friday 2pm'. For ONE "
+                                  "occurrence of a repeating reminder use `move`")
+    e.add_argument("--duration", help="how long it lasts, e.g. 1h, 30m")
+    e.add_argument("--for", dest="for_whom",
+                   help="replace who it is for, comma-separated")
+    e.add_argument("--alert", help="new offsets BEFORE the start, e.g. 1d,1h")
+    e.add_argument("--via", help="new channel letters, e.g. r,e. Given alone, "
+                                 "the existing offsets are kept")
+    e.add_argument("--note", help="free-text detail")
+    e.add_argument("--location", help="where")
+    e.add_argument("--priority", type=int, help="1 (highest) to 5 (lowest)")
+    e.add_argument("--notice", help="how long before it starts to show as pending")
+    e.add_argument("--timezone", help="only with --when")
+    e.add_argument("--offset", help="for tasks: reschedule this long after completion")
+    e.add_argument("--travel", help="travel time, e.g. 30m or 30m,15m")
+    e.add_argument("--repeat", help="repetition rule")
+    e.add_argument("--clear", help="remove fields entirely, comma-separated: "
+                                   + ", ".join(sorted(set(CLEARABLE))))
+    e.add_argument("--dry-run", action="store_true",
+                   help="print the before and after entry, change nothing")
+    e.set_defaults(fn=cmd_edit)
+
     mv = sub.add_parser("move", help="reschedule one occurrence")
     mv.add_argument("id", type=int)
     mv.add_argument("--instance", required=True); mv.add_argument("--to", required=True)
@@ -1865,6 +2287,22 @@ def main() -> int:
         die(f"--email {args.email!r} does not look like an email address",
             "Pass an address you actually know, or leave it off and the offer",
             "will ask the user for one. Never guess.")
+    # `setup` provisions a whole system, and two parts of that system resolve
+    # the workspace independently of this process: `tklr` typed in a terminal,
+    # and the dispatcher run by the scheduler. Neither can be told to look
+    # somewhere else, so a workspace that is not the one they resolve is a
+    # workspace nothing will ever poll and no user will ever see. That failure
+    # is silent in the worst way — setup reports success, the delivery test
+    # reports success, and no alert is ever sent. Refused here rather than
+    # warned about, because the warning would sit in output that already says
+    # everything worked.
+    if args.cmd == "setup" and args.home:
+        die(f"setup cannot use --home {args.home!r}",
+            f"The workspace is {tklr_home(None)}, which is where `tklr` looks "
+            "and where the dispatcher polls.",
+            "A workspace anywhere else is never polled and never delivers.",
+            "Re-run without --home. To move the default, set TKLR_HOME or",
+            "XDG_CONFIG_HOME for everything, not for this one command.")
     home = tklr_home(args.home)
     # `setup` is the command that CREATES the workspace, so it cannot require
     # one. Everything else does — operating on a missing workspace produces

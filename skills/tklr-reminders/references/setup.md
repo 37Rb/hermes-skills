@@ -8,9 +8,13 @@ Once alerts are being delivered you never need this file again.
 want and confirming a test alert arrived. Discovery, config editing, the cron
 job, and verification are yours. Never hand them a command to run.
 
+Take the `R=` line from `SKILL.md`, where it is already resolved to a real path.
+Everything else hangs off it, so nothing below names a skill path directly:
+
 ```bash
-R=~/.hermes/skills/productivity/tklr-reminders/scripts/tklr_agent_wrapper.py
-S=~/.hermes/skills/productivity/tklr-reminders/scripts/set_alert_channel.py
+# R= ... comes from SKILL.md. This file is never template-substituted, so a
+# path written here would be a guess, and a wrong guess sends you to `tklr`.
+S="$(dirname "$R")/set_alert_channel.py"
 P=~/.hermes/scripts/tklr_alert_poller.py
 H=~/.config/tklr
 ```
@@ -225,7 +229,7 @@ nothing distinguishes them.
 by hand and do not write your own TOML code:**
 
 ```bash
-S=~/.hermes/skills/productivity/tklr-reminders/scripts/set_alert_channel.py
+S="$(dirname "$R")/set_alert_channel.py"     # R comes from SKILL.md
 
 python3 $S r 'hermes send --to PLATFORM:PASTE_FROM_SEND_LIST --quiet "⏰ Reminder: {name} — starts {when} ({start}). {description}"'
 python3 $S e 'sh -c "printf \"From: ACCOUNT_ADDRESS\\nTo: THEIR_ADDRESS\\nSubject: Reminder: {name} - starts {when} ({start})\\n\\n{name}\\nWhen: {start} ({when})\\n{description}\\n\" | himalaya message send"'
@@ -282,7 +286,7 @@ of this section is background on what the installer does and how to read its
 failures, not a step to perform.
 
 ```bash
-bash ~/.hermes/skills/productivity/tklr-reminders/scripts/install.sh
+bash "$(dirname "$R")/install.sh"            # R comes from SKILL.md
 ```
 
 Idempotent — safe to re-run. It installs tklr with
@@ -341,7 +345,7 @@ hermes cron create '* * * * *' --script tklr_alert_poller.py \
 
 * **`--script` takes the bare filename**, resolved *inside*
   `~/.hermes/scripts/`. Do **not** pass a path.
-  `--script ~/.hermes/skills/productivity/tklr-reminders/scripts/tklr_alert_poller.py`
+  `--script <the skill directory>/scripts/tklr_alert_poller.py`
   is **rejected** — the scheduler resolves the path and refuses anything
   outside `~/.hermes/scripts/` ("Blocked: script path resolves outside the
   scripts directory"), and that includes absolute paths, `../`, and symlinks.
@@ -484,7 +488,7 @@ about the others:
 ```bash
 hermes cron create '37 6 * * *' --skill tklr-reminders \
   --name tklr-briefing-alex --deliver 'PLATFORM:TARGET_FROM_SEND_LIST' \
-  "Summarise Alex's day: run python3 ~/.hermes/skills/productivity/tklr-reminders/scripts/tklr_agent_wrapper.py list --today, keep only rows in Alex's bin, and write a short friendly summary. Mention conflicts and overdue tasks. If the day is empty and nothing is overdue, output nothing."
+  "Summarise Alex's day: run python3 \"\$(cat ~/.hermes/scripts/tklr-wrapper-path)\" list --today, keep only rows in Alex's bin, and write a short friendly summary. Mention conflicts and overdue tasks. If the day is empty and nothing is overdue, output nothing."
 ```
 
 If the user later wants it to stop: `hermes cron rm <job-id>`. The

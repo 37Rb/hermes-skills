@@ -131,6 +131,40 @@ def _default_tklr_home() -> Path:
 
 DEFAULT_TKLR_HOME = _default_tklr_home()
 
+# Mirrors host.workspace_pin_path(). Spelled out rather than imported because
+# this file is copied out of the skill directory on its own and arrives with no
+# siblings -- see the note below about why it imports nothing from the skill.
+PIN_PATH = (Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+            / "scripts" / "tklr-workspace-path")
+
+
+def resolve_tklr_home() -> tuple[Path, str]:
+    """The workspace to poll, and one word saying where that came from.
+
+    Precedence, and the reasoning for it:
+
+      1. $TKLR_HOME -- a caller that exports it means it. The wrapper does
+         exactly this before running `--heal` against a workspace the user
+         named, and the pin must not override a deliberate instruction.
+      2. the pin -- written by setup. This is the branch cron takes, because
+         cron exports nothing, and it is the whole reason the pin exists.
+      3. the ambient default -- no pin yet (an install predating it, or a
+         dispatcher deployed by hand). Preserves the old behaviour rather than
+         refusing, since a missing pin is not evidence the workspace is wrong.
+
+    Note there is no XDG branch here: steps 1 and 3 both go through
+    `_default_tklr_home`, which already applies it.
+    """
+    if os.environ.get("TKLR_HOME"):
+        return DEFAULT_TKLR_HOME, "TKLR_HOME"
+    try:
+        pinned = PIN_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        pinned = ""
+    if pinned:
+        return Path(pinned).expanduser(), "pin"
+    return DEFAULT_TKLR_HOME, "default"
+
 # This file deliberately does NOT import host.py, unlike the rest of the skill:
 # it is copied out of the skill directory to wherever the host's scheduler
 # insists a script must live, and arrives there with no siblings. It needs no
@@ -440,13 +474,20 @@ def main() -> int:
     if check_only:
         force_heal = False
         verbose = True
-    home = DEFAULT_TKLR_HOME
+    home, home_source = resolve_tklr_home()
     db_path = home / "tklr.db"
 
     setup_logging()
 
     if not db_path.exists():
-        print(f"tklr alerts: no tklr database at {db_path}")
+        # Naming the source matters more than naming the path: "no database at
+        # ~/.config/tklr" reads like the workspace was never created, when the
+        # actual fault is usually that this run resolved a different workspace
+        # than the one setup configured.
+        print(f"tklr alerts: no tklr database at {db_path} (workspace from: {home_source})")
+        if home_source != "pin":
+            print("  setup records the workspace it configured; this run did not use it.")
+            print(f"  expected the recorded path in {PIN_PATH}")
         return 1
 
     # One dispatcher at a time per workspace; a slow send must not cause a

@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Idempotent setup for the tklr-reminders skill. Safe to re-run.
 #
-#   bash install.sh [--home <TKLR_HOME>]
+#   bash install.sh
+#
+# --home exists but is not for you: the wrapper passes the workspace it already
+# resolved. Naming one here puts the data where neither `tklr` in a terminal nor
+# the scheduled dispatcher will look, and both report success anyway. An earlier
+# agent copied this usage line, invented a path for it, and produced exactly
+# that -- so the flag is not shown. `setup` now refuses it.
 #
 # Does four things, skipping whatever is already done:
 #   1. installs tklr via uv (Hermes ships its own uv)
@@ -73,8 +79,47 @@ find_uv() {
 
 # ---------------------------------------------------------------- 1. tklr
 step "tklr installation"
+
+# The floor lives in tklr_mutate.py, which is what actually depends on it, and
+# is read from there rather than repeated: two copies of a version number drift
+# the first time one is bumped, and the copy that stops matching is the one
+# that silently stops gating.
+TKLR_MIN="$(sed -n 's/^TESTED_AGAINST = "\([0-9.]*\)".*/\1/p' \
+            "$SKILL_DIR/scripts/tklr_mutate.py" 2>/dev/null | head -1)"
+
+# Reads the number out of "tklr version 1.0.43 (up to date)". grep -o, not sed:
+# a BRE `.*` is greedy with no way to say otherwise, so the sed form matched the
+# LAST digit run and reported 1.0.43 as "43" -- which compares older than every
+# floor and would have refused every install.
+tklr_version() { tklr --version 2>&1 | head -1 | grep -oE '[0-9]+(\.[0-9]+)+' | head -1; }
+
+# True when $1 is older than $2. sort -V is the only version comparison
+# available without leaving POSIX-ish shell, and it is right for these.
+older_than() { [[ "$1" != "$2" ]] && [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" == "$1" ]]; }
+
+check_tklr_version() {
+    local have="$1"
+    [[ -z "$TKLR_MIN" || -z "$have" ]] && return 0
+    if older_than "$have" "$TKLR_MIN"; then
+        warn "tklr $have is older than $TKLR_MIN, which this skill requires."
+        warn ""
+        warn "It reads tklr's Alerts table directly and depends on behaviour"
+        warn "that differs in older releases, so it would fail in ways that"
+        warn "look like bugs in the skill rather than a version mismatch."
+        warn ""
+        warn "Upgrade, then re-run this script:"
+        warn "  uv tool upgrade tklr-dgraham    # or: pipx upgrade tklr-dgraham"
+        return 1
+    fi
+    return 0
+}
+
 if command -v tklr >/dev/null 2>&1; then
-    ok "already installed — $(tklr --version 2>&1 | head -1)"
+    # Whose tklr this is matters when there is more than one on the machine:
+    # this names the exact binary rather than leaving it to be guessed.
+    ok "already installed — $(tklr --version 2>&1 | head -1) at $(command -v tklr)"
+    ok "using the existing installation; nothing new will be installed"
+    check_tklr_version "$(tklr_version)" || exit 1
 else
     UV="$(find_uv)" || true
     if [[ -z "$UV" ]]; then
@@ -115,7 +160,11 @@ else
         warn "installed, but 'tklr' is not on PATH — run: $UV tool update-shell"
         exit 1
     fi
-    ok "installed — $(tklr --version 2>&1 | head -1)"
+    ok "installed — $(tklr --version 2>&1 | head -1) at $(command -v tklr)"
+    # A fresh install of the current release should never trip this. It is here
+    # because "the newest release is older than the floor" is worth failing on
+    # loudly rather than discovering later inside a parse error.
+    check_tklr_version "$(tklr_version)" || exit 1
 fi
 
 # ------------------------------------------------------------ 2. workspace
@@ -144,6 +193,21 @@ if python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" \
     ok "poller parses cleanly"
 else
     warn "poller failed to parse"
+fi
+
+# The wrapper stays in the skill directory, but a scheduled run has no way to
+# learn where that is: the blueprint prompt is copied verbatim, so the
+# ${HERMES_SKILL_DIR} token SKILL.md relies on is never substituted there. The
+# skill directory has already moved once (a symlink under the host's skills dir
+# to a git checkout named by skills.external_dirs) and every hardcoded path
+# broke, silently, until an agent hit the missing file and improvised. Recording
+# it beside the dispatcher gives anything running unattended one stable place to
+# read, and this script is the only thing that already knows the answer.
+if printf '%s\n' "$SKILL_DIR/scripts/tklr_agent_wrapper.py" \
+        > "$HERMES_SCRIPTS/tklr-wrapper-path" 2>/dev/null; then
+    ok "recorded wrapper path for scheduled runs"
+else
+    warn "could not record the wrapper path; the daily health check will fail"
 fi
 
 # --------------------------------------------- 4. are channel letters set up?

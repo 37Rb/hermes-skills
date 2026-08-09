@@ -229,6 +229,24 @@ else
     skip "$DISPATCHER"
 fi
 
+# Both are written by install.sh beside the dispatcher, and both are read by
+# things that run unattended. Leaving either behind makes the NEXT setup look
+# like it worked when it did not: a stale pin means an install that never
+# recorded its workspace still finds one, and a stale wrapper path means a
+# scheduled health check still resolves the script. A reset that leaves working
+# scaffolding behind cannot be used to test a from-scratch install, which is
+# the only thing it is for.
+step "recorded paths beside the dispatcher"
+for recorded in "$HERMES_HOME/scripts/tklr-workspace-path" \
+                "$HERMES_HOME/scripts/tklr-wrapper-path"; do
+    if [[ -f "$recorded" ]]; then
+        act "rm $recorded"
+        [[ $DRY_RUN -eq 0 ]] && rm -f "$recorded"
+    else
+        skip "$recorded"
+    fi
+done
+
 # -------------------------------------------------------------------- 4. log
 step "dispatcher log"
 if compgen -G "${LOG_GLOB}*" >/dev/null 2>&1; then

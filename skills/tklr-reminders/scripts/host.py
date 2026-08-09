@@ -254,6 +254,23 @@ def dispatcher_path() -> Path:
     return HOST_HOME / "scripts" / "tklr_alert_poller.py"
 
 
+def workspace_pin_path() -> Path:
+    """Where the resolved workspace is recorded for unattended runs.
+
+    The dispatcher runs from a scheduler, in an environment that does not
+    inherit the shell the workspace was chosen in. Re-resolving there reads
+    different environment variables and can name a different directory, which
+    is invisible: alerts are written in one workspace and polled in another,
+    and every report says success. So setup resolves once and records the
+    answer here, beside the dispatcher, and the dispatcher reads it instead of
+    resolving again.
+
+    Beside the dispatcher on purpose: a host that can schedule the dispatcher
+    at all can write next to it, so the two cannot become separated.
+    """
+    return dispatcher_path().parent / "tklr-workspace-path"
+
+
 def cron_job_present() -> bool | None:
     """Is the every-minute dispatcher job scheduled?
 

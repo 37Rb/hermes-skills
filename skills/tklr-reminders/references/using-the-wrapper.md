@@ -4,7 +4,11 @@ Everything you run to create, read, change or complete a reminder. Load this
 whenever you are about to compose a command; you do not need it to talk to the
 user about what the skill does.
 
-`$R` is `~/.hermes/skills/productivity/tklr-reminders/scripts/tklr_agent_wrapper.py`.
+`$R` is defined for you in `SKILL.md`, already resolved to a real path. Use that
+line. Do not write a path here from memory: this file is read straight off disk
+and is never template-substituted, so an absolute path written here goes stale
+the moment the skill is installed anywhere else, and a stale one is what makes
+an agent give up on the wrapper and start calling `tklr` by hand.
 Every example here is something **you** run. None of it is something the user
 should ever see or type — see *How to talk about this skill* in `SKILL.md`.
 
@@ -257,85 +261,105 @@ Rules that make the confirmation worth asking:
 | none | say so and offer a broader search — don't silently do nothing |
 | it's someone else's | say whose it is and confirm before touching it |
 
-**Then read the record before changing it.** `details <id>` prints the tokens
-verbatim, and that is your only copy if you are about to delete and re-add.
+**Then read the record before changing it.** `$R show <id>` prints the tokens
+verbatim, which is what lets you tell the user what is changing in their words
+rather than yours.
 
 ### What the user says → what you do
+
+Always through `$R`. Every row below is a wrapper subcommand, and the wrapper is
+where the guards live: it resolves your datetimes, refuses an empty `--instance`
+that would otherwise delete a whole series, and routes around the tklr defects
+that make some of these unsafe done directly. `tklr_mutate.py` is the layer
+underneath and is documented further down for reading, not for calling.
 
 | Request | Steps |
 |---------|-------|
 | "I've done that" (a task) | `$R done <id>` |
-| "Cancel Friday's meeting" | find the id, confirm which one, `tklr_mutate.py delete <id>` |
-| "Move the dentist to Thursday at 2" | `reschedule <id> --instance '<current datetime>' --to '2026-08-13 14:00'` |
-| "Skip next Monday's standup" | `delete <id> --instance '2026-08-10 09:00'` — keeps the rest of the series |
-| "Stop the standup after this week" | `delete <id> --from '2026-08-17 09:00'` |
-| "Make it an hour instead of 30 minutes" | read, compose, **`check`**, delete, re-add, verify — see *Editing = validate, then replace* |
+| "Cancel Friday's meeting" | find the id, confirm which one, `$R delete <id>` |
+| "Move the dentist to Thursday at 2" | `$R move <id> --instance '<current datetime>' --to '2026-08-13 14:00'` |
+| "Also send it to my email" | `$R edit <id> --via r,e` |
+| "Make it an hour instead of 30 minutes" | `$R edit <id> --duration 1h` |
+| "Call it 'Dentist checkup' instead" | `$R edit <id> --subject 'Dentist checkup'` |
+| "Remind me a day ahead as well" | `$R edit <id> --alert 1d,1h` |
+| "Drop the reminder, keep the appointment" | `$R edit <id> --clear alerts` |
+| "Skip next Monday's standup" | `$R delete <id> --instance '2026-08-10 09:00'` — keeps the rest of the series |
+| "Stop the standup after this week" | `$R delete <id> --from '2026-08-17 09:00'` |
 | "Skip the next three Mondays" | one `--instance` delete only works **once** per record (below); read the tokens, delete, re-add with a comma-separated `@-` list |
 
-### Editing = validate, then replace — in that order
-
-There is no edit command, so changing a detail means replacing the record. The
-order is load-bearing, because a delete cannot be undone:
+### Editing = one command
 
 ```bash
-# 1. read the original — this is your only copy
-python3 $R show 42
-#    * Team meeting @s 2026-08-06 14:00 @e 30m @b alex @a 1h: r
-
-# 2. compose the replacement, changing only what was asked
-#    * Team meeting @s 2026-08-06 14:00 @e 1h  @b alex @a 1h: r
-
-# 3. VALIDATE IT FIRST — never delete until the replacement is known good
-python3 $R --raw '* Team meeting @s 2026-08-06 14:00 @e 1h @b alex @a 1h: r' --dry-run
-#    must print "WOULD create: …"
-
-# 4. only now delete the original
-python3 $M delete 42
-
-# 5. add the replacement — same command without --dry-run
-python3 $R --raw '* Team meeting @s 2026-08-06 14:00 @e 1h @b alex @a 1h: r'
-#    prints "created id NN: …"; it also checks for a draft and heals
-
-# 6. confirm the result
-python3 $R list --date 2026-08-06
+python3 $R edit 42 --duration 1h
 ```
 
-`--raw` is right for an edit: you are reproducing an existing entry with one
-field changed, so you already have exact tokens and don't want them
-re-derived. It still validates, reads `add`'s output, rejects a draft, and
-heals — you only lose the field assembly.
+`edit` changes a reminder **in place**. Name only what changes; everything else
+is left exactly as it is. It keeps the id, so anything referring to id 42 still
+does.
 
-If step 3 fails, stop — nothing has been destroyed yet. If step 5 somehow
-fails after the delete, say so immediately and re-add from the tokens you kept
-in step 1; do not go quiet about it.
+| Flag | Changes |
+|------|---------|
+| `--subject` | the wording |
+| `--when` (+`--timezone`) | the start. For ONE occurrence of a repeating reminder use `move` |
+| `--duration` | how long it lasts |
+| `--alert` / `--via` | offsets and channels; see below |
+| `--for` | who it is for, replacing the current people |
+| `--note`, `--location`, `--priority`, `--notice`, `--offset`, `--travel`, `--repeat` | that field |
+| `--clear <field,…>` | removes fields entirely: `duration`, `repeat`, `location`, `priority`, `notice`, `offset`, `travel`, `note`, `people`, `alerts` |
+| `--dry-run` | prints the before and after entry, changes nothing |
 
-Note the record gets a **new id**, and `details` collapses bin paths to the leaf
-(`@b alex`, not `@b alex/users`). Re-adding the leaf form is fine — the bin
-already exists, so the person association survives. Verified: the replaced
-record is still `bin alex (inside users)` and still matches
-`query 'in b ^alex$'`.
+**`--alert` and `--via` carry the other half over.** `--via r,e` alone keeps the
+offsets already on the reminder, and `--alert 1d,1h` alone keeps the channels.
+That is the point: "also send it to my email" names channels and must not
+silently reset the timing the user already chose.
 
-Tell the user you replaced it, and mention anything you could not carry over.
+**Do not delete and re-add to change something.** Earlier versions of this
+document told you to, and it costs more than it looks: the record gets a new id,
+and `Completions`, `Pinned`, `Hashtags` and the `@b` bin links all cascade-delete
+with the old row. For a repeating task that means wiping the completion history
+that tklr's own next-offset calculation reads. An edit touches none of it.
+
+Nothing is destroyed by a failed edit. The replacement is parsed and finalized
+before anything is written, and if it does not parse, the record is left exactly
+as it was and you are told why:
+
+```
+error: the edited entry for id 1 ('Lunch with Frank') was rejected; nothing was saved.
+  integers followed by 'w', 'd', 'h', or 'm'
+  The record is untouched, so the original is still intact.
+```
+
+`edit` then re-checks the alerts, because saving regenerates tklr's derived
+tables and only FUTURE alerts survive that. It reports `verified: N alert(s)
+queued`, or warns outright when a reminder has ended up with no alert and a start
+time in the past.
+
+Read the record first when you need to tell the user what is changing:
+`$R show <id>`. Note `details` collapses bin paths to the leaf (`@b alex`, not
+`@b alex/users`); that is display only, and an edit preserves the real link.
 
 ### What you can and cannot change
 
-The CLI has **no edit command and no delete command**, and `finish` only works
-on tasks. Verified on 1.0.43:
+tklr's own CLI has **no edit command and no delete command**, and `finish` only
+works on tasks. Verified on 1.0.43. The wrapper covers all of it, and the wrapper
+is what you call:
 
 | Want to | How |
 |---------|-----|
 | complete a task | `$R done <id>` |
 | complete an event | not a thing — `finish` replies "No changes made; task may already be finished" and leaves it on the calendar. Delete it instead. |
-| delete anything | `scripts/tklr_mutate.py delete <id>` |
-| delete one occurrence | `scripts/tklr_mutate.py delete <id> --instance '<datetime>'` |
-| delete this and future | `scripts/tklr_mutate.py delete <id> --from '<datetime>'` |
-| move one occurrence | `scripts/tklr_mutate.py reschedule <id> --instance '<current>' --to '<new>'` |
-| change any other detail | delete and re-add — there is no edit |
+| delete anything | `$R delete <id>` |
+| delete one occurrence | `$R delete <id> --instance '<datetime>'` |
+| delete this and future | `$R delete <id> --from '<datetime>'` |
+| move one occurrence | `$R move <id> --instance '<current>' --to '<new>'` |
+| change any other detail | `$R edit <id> --<field> <value>` |
 
-```bash
-python3 $M delete 42
-python3 $M reschedule 42 --instance '2026-08-07 14:00' --to '2026-08-13 15:00'
-```
+**Call `$R`, not `$M`.** The shim takes no natural-language datetimes and has
+none of the guards: `$R` resolves "tomorrow 2pm" before tklr ever sees it,
+refuses an empty `--instance` instead of silently deleting the whole series, and
+sends a `move` on a non-recurring reminder down a path that works instead of one
+that duplicates it. Reaching past the wrapper is how a reminder ended up on the
+schedule at two different times.
 
 **Why a script here.** These operations exist in tklr but have **no CLI
 surface** — `add` and `finish` are the only mutations the command line offers.

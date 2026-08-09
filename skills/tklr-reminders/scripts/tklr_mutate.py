@@ -33,6 +33,7 @@ Exit codes: 0 done, 1 refused/failed, 2 usage error.
 from __future__ import annotations
 
 import argparse
+import copy
 import os
 import shutil
 import subprocess
@@ -190,6 +191,20 @@ def fail(*lines: str) -> "NoReturn":  # type: ignore[valid-type]
     raise SystemExit(1)
 
 
+def refuse(*lines: str) -> "NoReturn":  # type: ignore[valid-type]
+    """Decline for a reason the caller can fix, with no UI_FALLBACK.
+
+    fail() is for "tklr's internals moved" and points at the interactive UI. A
+    rejected value is not that: the fix is a better value, and sending someone
+    to `tklr ui` for it would be actively wrong, since for a reschedule the UI
+    runs the same defective code path this script exists to avoid.
+    """
+    print("error: " + lines[0], file=sys.stderr)
+    for extra in lines[1:]:
+        print("  " + extra, file=sys.stderr)
+    raise SystemExit(1)
+
+
 def open_controller(home: str | None):
     from tklr.tklr_env import TklrEnvironment
     from tklr.cli.main import ensure_database
@@ -267,6 +282,175 @@ def render_entry(ctrl, rid: int) -> str:
     return ""
 
 
+def record_tokens(ctrl, rid: int) -> list[dict] | None:
+    """The stored token list for `rid`, found by shape like render_entry does."""
+    import json
+
+    get_record = getattr(ctrl.db_manager, "get_record", None)
+    if not callable(get_record):
+        return None
+    row = get_record(rid)
+    if not row:
+        return None
+    for value in row:
+        if not isinstance(value, str) or not value.startswith("["):
+            continue
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            continue
+        if (isinstance(parsed, list) and parsed
+                and all(isinstance(t, dict) for t in parsed)
+                and any("token" in t for t in parsed)):
+            return parsed
+    return None
+
+
+def token_key(tok: dict) -> str | None:
+    """The `@` letter a token carries, or None for itemtype/subject/other."""
+    return tok.get("k") if tok.get("t") == "@" else None
+
+
+def join_tokens(tokens: list[dict]) -> str:
+    """The entry text these tokens produce — the same join apply_token_edit does."""
+    return " ".join(str(t.get("token", "")).strip() for t in tokens
+                    if str(t.get("token", "")).strip())
+
+
+def grouped_sets(specs: list[str]) -> dict[str, list[str]]:
+    """Parse `['@e 1h', '@b a/users', '@b b/users']` into {'e': [...], 'b': [...]}.
+
+    Order within a key is preserved, which is what makes two `@b` people land
+    in the order the caller listed them.
+    """
+    out: dict[str, list[str]] = {}
+    for spec in specs:
+        text = spec.strip()
+        if not text.startswith("@") or len(text) < 2:
+            sys.exit(f"error: --set {spec!r} must start with an @ token, e.g. '@e 1h'")
+        key = text[1]
+        if not key.isalnum() and key not in "~-+":
+            sys.exit(f"error: --set {spec!r} has no usable @ key")
+        out.setdefault(key, []).append(text)
+    return out
+
+
+def insert_at(tokens: list[dict], key: str) -> int:
+    """Where a new `@key` token may go without changing what it means.
+
+    `@d` swallows the rest of the entry: tklr treats everything after it as the
+    description, so a token appended after one is absorbed into the note text
+    instead of being parsed. Every insert therefore lands BEFORE an existing
+    `@d`, and a new `@d` goes last.
+    """
+    if key == "d":
+        return len(tokens)
+    for index, tok in enumerate(tokens):
+        if token_key(tok) == "d":
+            return index
+    return len(tokens)
+
+
+def apply_token_changes(tokens: list[dict], subject: str | None,
+                        sets: dict[str, list[str]], removes: list[str]) -> bool:
+    """Mutate `tokens` in place. Returns True iff anything actually changed.
+
+    `sets` REPLACES every token of a key rather than editing the first one,
+    because several keys legitimately repeat (`@b` once per person, `@~` once
+    per project step). Replacing the whole group is the only rule that behaves
+    the same for a repeating key and a single one.
+    """
+    changed = False
+
+    if subject is not None:
+        for tok in tokens:
+            if tok.get("t") == "subject":
+                if tok.get("token") != subject:
+                    tok["token"] = subject
+                    changed = True
+                break
+        else:
+            # No subject token at all: it belongs immediately after the
+            # itemtype, which is always first.
+            tokens.insert(1, {"token": subject, "t": "subject"})
+            changed = True
+
+    for key in removes:
+        kept = [t for t in tokens if token_key(t) != key]
+        if len(kept) != len(tokens):
+            tokens[:] = kept
+            changed = True
+
+    for key, values in sets.items():
+        existing = [i for i, t in enumerate(tokens) if token_key(t) == key]
+        replacement = [{"token": v, "t": "@", "k": key} for v in values]
+        if existing and [tokens[i].get("token") for i in existing] == values:
+            continue                       # already exactly this
+        where = existing[0] if existing else insert_at(tokens, key)
+        tokens[:] = [t for t in tokens if token_key(t) != key]
+        tokens[where:where] = replacement
+        changed = True
+
+    return changed
+
+
+def save_edited_tokens(ctrl, rid: int, mutate) -> tuple[bool, bool, str]:
+    """Apply `mutate` to the record's tokens and save it back under the same id.
+
+    Returns (changed, saved, error). `changed` is False when the mutation was a
+    no-op; `saved` is False when the result would not parse, in which case
+    NOTHING was written and the record is exactly as it was.
+
+    DELIBERATELY NOT Controller.apply_token_edit, which does the same job with
+    one defect we cannot work around from outside: it builds the Item with
+    `Item(entry, controller=self)` and then calls `item.parse_input(entry)` a
+    second time. Item.__init__ already parses when given a raw entry, and
+    parse_input resets a dozen fields but never `self.alerts` -- it only appends
+    to it. So every alert spec on the record is duplicated by the round trip:
+    one `@a 40m: r, e` token comes back out as
+    `["40m: r, e", "40m: r, e"]` and the reminder notifies twice. Measured on
+    tklr 1.0.43. The sequence here parses exactly once, with `final=True` set
+    through the constructor where it belongs, which is also why it does not need
+    the second call that upstream added to get `final` applied.
+
+    Everything else matches upstream: same mask reveal, same finalize, same
+    save_record(record_id=...) so the id, and every row keyed to it, survive.
+    """
+    import json
+
+    from tklr.item import Item
+    from tklr.mask import reveal_mask_tokens
+
+    get_dict = require(ctrl.db_manager, "get_record_as_dictionary", ["record"])
+    rec = get_dict(rid)
+    if not rec:
+        return False, False, f"no record {rid}"
+
+    try:
+        tokens = json.loads(rec.get("tokens") or "[]")
+    except (ValueError, TypeError) as exc:
+        return False, False, f"stored tokens are not readable JSON: {exc}"
+    tokens = reveal_mask_tokens(tokens, getattr(ctrl, "mask_secret", ""))
+
+    if not mutate(tokens):
+        return False, False, ""
+
+    entry = join_tokens(tokens)
+    if not entry.strip():
+        return True, False, "the edit would leave an empty entry"
+
+    item = Item(entry, controller=ctrl, final=True)
+    if not getattr(item, "parse_ok", False):
+        return True, False, getattr(item, "parse_message", "") or "entry did not parse"
+    item.finalize_record()
+    if not getattr(item, "parse_ok", False):
+        return True, False, getattr(item, "parse_message", "") or "entry did not finalize"
+
+    save = require(ctrl.db_manager, "save_record", ["item", "record_id"])
+    save(item, record_id=rid)
+    return True, True, ""
+
+
 def rebuild(ctrl) -> None:
     """Force tklr to rebuild derived tables — no DerivedState surgery needed."""
     fn = getattr(ctrl.db_manager, "populate_dependent_tables", None)
@@ -279,7 +463,7 @@ def rebuild(ctrl) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("action", choices=["delete", "reschedule"])
+    ap.add_argument("action", choices=["delete", "reschedule", "edit"])
     ap.add_argument("record_id", type=int)
     ap.add_argument("--home", default=None)
     ap.add_argument("--instance", default=None,
@@ -288,6 +472,17 @@ def main() -> int:
                     help="delete this occurrence and all later ones")
     ap.add_argument("--to", dest="to_dt", default=None,
                     help="reschedule: the new datetime")
+    ap.add_argument("--subject", default=None,
+                    help="edit: replace the subject text")
+    ap.add_argument("--set", dest="sets", action="append", default=[],
+                    metavar="'@K value'",
+                    help="edit: set a token, replacing every existing one of "
+                         "that key. Repeatable, including twice for one key "
+                         "(e.g. two @b people). Compose these in the wrapper, "
+                         "not by hand.")
+    ap.add_argument("--remove", dest="removes", action="append", default=[],
+                    metavar="K",
+                    help="edit: drop every token with this @ key")
     ap.add_argument("--dry-run", action="store_true",
                     help="resolve and print the target, change nothing — use this "
                          "to show the user exactly what is about to happen")
@@ -311,6 +506,21 @@ def main() -> int:
                 what = f"delete only the occurrence at {args.instance}"
             else:
                 what = "delete the ENTIRE reminder, including every occurrence"
+        elif args.action == "edit":
+            tokens = record_tokens(ctrl, rid)
+            if tokens is None:
+                fail(f"could not read the stored tokens for id {rid}.")
+            preview = copy.deepcopy(tokens)
+            if not apply_token_changes(preview, args.subject,
+                                       grouped_sets(args.sets), args.removes):
+                print(f"no change: id {rid} already reads that way")
+                print(f"  {render_entry(ctrl, rid)}")
+                return 0
+            print(f"WOULD edit id {rid}: {subject!r}")
+            print(f"  from: {render_entry(ctrl, rid)}")
+            print(f"  to:   {join_tokens(preview)}")
+            print("  (nothing was changed)")
+            return 0
         else:
             what = f"move the occurrence at {args.instance} to {args.to_dt}"
         print(f"WOULD {what}")
@@ -362,6 +572,53 @@ def main() -> int:
                      "Expected only that occurrence to go.")
             print(f"deleted {scope} of id {rid}: {subject!r}")
         print(f"  {len(after)} reminder(s) remain")
+        return 0
+
+    if args.action == "edit":
+        if args.subject is None and not args.sets and not args.removes:
+            sys.exit("error: edit needs --subject, --set or --remove")
+
+        before_entry = render_entry(ctrl, rid)
+        sets = grouped_sets(args.sets)
+        removes = list(args.removes)
+
+        # changed and saved are reported separately on purpose: "the edit was a
+        # no-op" and "the result would not parse" are different answers, and
+        # only the second is a failure. Collapsing them into one boolean is what
+        # makes a rejected edit look like a successful one.
+        def mutate(tokens: list[dict]) -> bool:
+            return apply_token_changes(tokens, args.subject, sets, removes)
+
+        changed, saved, err = save_edited_tokens(ctrl, rid, mutate)
+
+        if not changed:
+            print(f"no change: id {rid} already reads that way")
+            print(f"  {before_entry}")
+            return 0
+        if not saved:
+            refuse(f"the edited entry for id {rid} ({subject!r}) was rejected; "
+                   "nothing was saved.",
+                   err or "it did not parse or finalize",
+                   "The record is untouched, so the original is still intact.",
+                   f"was: {before_entry}")
+
+        rebuild(ctrl)
+        after = snapshot(ctrl)
+        if rid not in after:
+            fail(f"editing removed id {rid} entirely — this should be impossible.")
+        collateral = set(before) - set(after)
+        if collateral:
+            fail(f"the edit removed other reminders: {sorted(collateral)}",
+                 "Investigate before trusting this again.")
+
+        after_entry = render_entry(ctrl, rid)
+        if after_entry == before_entry:
+            fail(f"id {rid} reports saved but its entry is unchanged.",
+                 f"still: {after_entry}")
+
+        print(f"edited id {rid}: {after[rid]!r}")
+        print(f"  from: {before_entry}")
+        print(f"  to:   {after_entry}")
         return 0
 
     # reschedule

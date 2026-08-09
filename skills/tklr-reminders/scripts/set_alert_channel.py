@@ -94,8 +94,30 @@ def section_bounds(lines: list[str]) -> tuple[int, int] | tuple[None, None]:
     return start, end
 
 
+def back_up_once(config: Path) -> None:
+    """Keep the config as it was before this skill first touched it.
+
+    Written once and never overwritten, so it holds the user's own file rather
+    than the state left by the previous run of this script. Someone who already
+    used tklr arrives with a config they tuned by hand, and every alert letter
+    is an edit to it; a first-touch copy is what makes that reversible.
+
+    Best effort: a config that cannot be copied is not a reason to refuse to
+    configure a channel, so this warns and continues.
+    """
+    backup = config.with_name(config.name + ".before-tklr-reminders")
+    if backup.exists() or not config.exists():
+        return
+    try:
+        shutil.copy2(config, backup)
+        print(f"  saved your original config to {backup.name}")
+    except OSError as exc:
+        warn(f"could not back up {config.name} ({exc}); continuing")
+
+
 def write_letter(config: Path, letter: str, command: str | None) -> None:
     """Insert/replace/remove one letter inside [alerts], preserving everything else."""
+    back_up_once(config)
     text = config.read_text(encoding="utf-8")
     lines = text.splitlines()
 

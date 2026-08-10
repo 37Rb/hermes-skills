@@ -1,6 +1,6 @@
-# Tklr Tasks, Scheduling, & Reminders for Hermes Agent
+# Tklr Reminders: Schedule and productivity assistant for Hermes Agent
 
-A [Hermes Agent](https://github.com/NousResearch/hermes-agent) skill that turns your agent into a personal schedule assistant: appointments, events, tasks, reminders, and the questions people typically ask about them.
+A skill for [Hermes Agent](https://github.com/NousResearch/hermes-agent). It covers appointments, events, tasks, projects, goals and notes, the reminders that go with them, and the questions people typically ask about them.
 
 You talk to it in plain language. It works out the commands, and it delivers reminder alerts to whatever channels you use (Matrix, Telegram, Signal, email, SMS, desktop notifications) at the lead times you asked for.
 
@@ -185,9 +185,11 @@ hermes skills install 37Rb/hermes-skills/skills/tklr-reminders --category produc
 
 `--category productivity` files it under `~/.hermes/skills/productivity/`. Leave the flag off and it installs flat at `~/.hermes/skills/tklr-reminders`. The skill works either way, since Hermes only uses the category for grouping.
 
-Then run this, exactly as written:
+Then send this to your agent, exactly as written:
 
-> `/tklr-reminders setup`
+```
+/tklr-reminders setup
+```
 
 That loads the skill and it takes it from there: installs tklr, creates the workspace, installs the alert dispatcher, creates the cron job, points alerts at the chat you are already talking in, and sends you a test reminder to confirm delivery works.
 

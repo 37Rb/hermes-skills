@@ -181,6 +181,14 @@ def platform_targets(platform: str) -> list[str]:
     `setup` auto-selects when there is exactly one and asks when there are
     several, so order matters only in what it shows the user.
     """
+    # An empty platform makes the pattern below `\b:\S+`, which matches the
+    # colon in every line of the listing and returns targets with no platform on
+    # them (`:Ryan`). They look like data and are accepted by anything that does
+    # not re-parse them. The one caller validates first, so this is a guard on
+    # the seam rather than a live fault -- but returning shaped nonsense is the
+    # wrong contract for a file whose whole job is to be re-implemented.
+    if not (platform or "").strip():
+        raise HostError("platform_targets needs a platform name")
     seen, targets = set(), []
     for match in re.findall(rf"\b{re.escape(platform)}:\S+", chat_list(platform)):
         target = match.rstrip(".,")

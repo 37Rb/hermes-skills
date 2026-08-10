@@ -122,7 +122,7 @@ dispatcher never needs to read a record.
 | Reminder delivered to nobody, but reported as sent | A letter is defined as a no-op (`true`, `:`). Replace it with a real delivery command. |
 | Alert delivered repeatedly | Its `Alerts` row isn't being deleted — check the log for a command that keeps failing, since a failing row is retried every minute by design. |
 | Nothing fires at all | `hermes cron list` — is `tklr-alert-poller` there? Is the scheduler running (`hermes cron status`)? |
-| `tklr: command not found` | `export PATH="$HOME/.local/bin:$PATH"`, or re-run `install.sh`. |
+| `tklr: command not found` | `export PATH="$HOME/.local/bin:$PATH"`, or re-run `setup --platform <platform>`, which reinstalls it. |
 | Entry rejected on a date | Don't pass `tomorrow` or `next week`; compute the date. |
 | A listing looks wrong in chat | Add `--plain`, and `--width 60` for narrow screens. |
 

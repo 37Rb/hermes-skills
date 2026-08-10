@@ -260,16 +260,11 @@ alert actually arrived, which is the one thing you cannot check.
 
 ## First-run setup
 
-**Do not run `install.sh` as your first step.** `python3 $R setup --platform
-<platform>` runs it for you and then does everything it leaves undone. The rest
-of this section is background on what the installer does and how to read its
-failures, not a step to perform.
+**Never run `install.sh`. `setup` runs it for you.** There is no case where you
+run it by hand, so this section contains no command for it: what follows is what
+it does and how to read its failures when `setup` reports one.
 
-```bash
-bash "$(dirname "$R")/install.sh"            # R comes from SKILL.md
-```
-
-Idempotent — safe to re-run. It installs tklr with
+It is idempotent. It installs tklr with
 `uv tool install --python '>=3.12' tklr-dgraham`, creates the workspace, copies
 the dispatcher to `~/.hermes/scripts/`, and reports whether any `[alerts]`
 letters are defined yet.

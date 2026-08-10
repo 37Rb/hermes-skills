@@ -210,11 +210,7 @@ On Matrix and Slack it is `!tklr`, for the same reason `!tklr-reminders` applies
 <details>
 <summary>What the installer does</summary>
 
-```bash
-bash ~/.hermes/skills/productivity/tklr-reminders/scripts/install.sh
-```
-
-Idempotent, so it doubles as a readiness check if something drifts. It:
+The agent runs this for you as part of setup. Idempotent, so it doubles as a readiness check if something drifts. It:
 
 1. installs `tklr-dgraham` via `uv` (Hermes ships its own `uv`)
 2. creates the tklr workspace at `~/.config/tklr` (`config.toml` + `tklr.db`)

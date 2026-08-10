@@ -4,13 +4,17 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) skill that turns 
 
 You talk to it in plain language. It works out the commands, and it delivers reminder alerts to whatever channels you use (Matrix, Telegram, Signal, email, SMS, desktop notifications) at the lead times you asked for.
 
+If you just want it running, [skip to Install](#install).
+
 **It currently requires Hermes Agent.** A port to OpenClaw is planned; see [Portability](references/how-it-works.md#portability) for the details.
 
-If you just want it running, [skip to Install](#install).
+## Six kinds of reminder
 
 Six kinds of reminder cover everything you'd ask for. You don't need to know them when using: you say what you want and the agent picks. But they are what the skill is made of, so here is each one as a conversation.
 
-**Event**: something that happens at a particular time. It goes on the calendar, it can hold travel time either side, and it is the only type that really needs a clock.
+### Event
+
+Something that happens at a particular time. It goes on the calendar, it can hold travel time either side, and it is the only type that really needs a clock.
 
 ```
 You:    Lunch with Ed Friday at noon, an hour and a half, nudge me 15
@@ -44,7 +48,9 @@ You:    Skip next Monday's standup, keep the rest
 Agent:  Done: next Monday is off. The rest of the series is untouched.
 ```
 
-**Task**: something that requires an action to complete. A date is optional; what matters is that it stays on the list until it's done.
+### Task
+
+Something that requires an action to complete. A date is optional; what matters is that it stays on the list until it's done.
 
 ```
 You:    Remind me to pick up milk
@@ -76,7 +82,9 @@ You:    Got the milk
 Agent:  Done: Pick up milk is complete.
 ```
 
-**Project**: a collection of related tasks, tracked together, where some steps can wait on others.
+### Project
+
+A collection of related tasks, tracked together, where some steps can wait on others.
 
 ```
 You:    Build the dog house: pick up materials, cut the panels, then
@@ -97,7 +105,9 @@ Agent:  Noted: Cut the panels is on Jordan's list now, still part of the
         project.
 ```
 
-**Goal**: a target rate rather than a date, meaning *n* completions per period. Nothing is ever overdue, you're just ahead or behind.
+### Goal
+
+A target rate rather than a date, meaning *n* completions per period. Nothing is ever overdue, you're just ahead or behind.
 
 ```
 You:    I want to do interval training three times a week
@@ -115,7 +125,9 @@ Agent:  Interval training, target 3 a week, one completion recorded.
         behind.
 ```
 
-**Note**: information for future reference. No schedule, no alerts; it's there so you can find it later.
+### Note
+
+Information for future reference. No schedule, no alerts; it's there so you can find it later.
 
 ```
 You:    Remember that the wifi password is on the back of the router
@@ -131,7 +143,9 @@ Agent:  "Give me a pig! He looks you in the eye and treats you as an
         equal." Churchill.
 ```
 
-**Jot**: a few words dashed off while something is happening, stamped with the time so you can make sense of it later. Tklr's own description is "in the heat of battle when every second counts, jot down just enough to trigger your memory later when things have calmed down."
+### Jot
+
+A few words dashed off while something is happening, stamped with the time so you can make sense of it later. Tklr's own description is "in the heat of battle when every second counts, jot down just enough to trigger your memory later when things have calmed down."
 
 ```
 You:    Jot down that I'm taking a walk
@@ -153,6 +167,8 @@ Agent:  4 hours logged. Billing 2h, all Henderson. Exercise 2h, split
 ```
 
 Capture first, fill in the detail afterwards: that two-step is the whole point of a jot, and what separates it from a note. A note is information you file because you'll want it later; a jot is a record that at 13:14 this happened. Categories nest, so `exercise.walking` and `exercise.interval_training` total together under `exercise` without mixing into your billing hours.
+
+## Behind the scenes
 
 Behind the scenes is [tklr](https://github.com/dagraham/tklr-dgraham) ([documentation](https://dagraham.github.io/tklr-dgraham/)). You don't need to learn its syntax. Just talk to your agent in natural language and let it use the tool.
 
@@ -177,11 +193,19 @@ That loads the skill and it takes it from there: installs tklr, creates the work
 
 **On Matrix and Slack, type `!tklr-reminders setup` instead.** Those clients reserve `/` for their own commands, so a typed `/` never reaches Hermes; their adapters accept `!` and rewrite it. Every other platform uses `/`.
 
-**Include the word `setup`; it does real work.** Anything you type after the command is passed through to the agent as your instruction, and it is placed at the very end of the message, after the skill and after the file listing Hermes appends. That last position is the one the agent acts on most reliably. A bare `/tklr-reminders` gives it a document and no task, and smaller local models tend to respond by describing the skill or offering you a menu instead of setting it up. One word fixes it.
-
-Use the explicit invocation for the first run rather than asking in your own words. Every skill is registered as `/<skill-name>`, and invoking it loads the skill directly, with no guessing about whether your phrasing matched. Something like "set up my reminders" relies on the agent picking this skill out of ~65 others from a one-line description, which it may not do, especially if you have used a different calendar tool with it before. Once setup is done, plain language works fine for everyday use.
-
 The same trick helps later on. `/tklr-reminders what can you do?` or `/tklr-reminders add my dentist appointment` both reload the skill *and* give it the task, which is more reliable on a small model than the command alone.
+
+### A shorter name
+
+`/tklr-reminders` is a lot to type for something you reach for several times a day. You can register `/tklr` as an alias for the same skill:
+
+```bash
+hermes config set quick_commands.tklr.type alias
+hermes config set quick_commands.tklr.target tklr-reminders
+hermes gateway restart
+```
+
+On Matrix and Slack it is `!tklr`, for the same reason `!tklr-reminders` applies there.
 
 <details>
 <summary>What the installer does</summary>
@@ -196,8 +220,6 @@ Idempotent, so it doubles as a readiness check if something drifts. It:
 2. creates the tklr workspace at `~/.config/tklr` (`config.toml` + `tklr.db`)
 3. copies the alert dispatcher into `~/.hermes/scripts/`
 4. reports whether any alert channels are defined yet
-
-It deliberately does **not** invent alert channels, and does **not** create the cron job. Both need to know your actual delivery targets.
 </details>
 
 ## What setup involves
@@ -252,7 +274,7 @@ references/how-it-works.md            delivery, healing, SQLite, troubleshooting
 references/tklr-syntax.md             underlying tklr grammar, only needed for --raw
 scripts/tklr_agent_wrapper.py         the one interface: add edit list show find
                                         free done delete move uses channels
-                                        status setup email welcome
+                                        status setup email shortcut welcome
 scripts/tklr_alert_poller.py          the every-minute dispatcher
 scripts/set_alert_channel.py          safely edit [alerts]; validates targets
 scripts/tklr_mutate.py                low-level record edits

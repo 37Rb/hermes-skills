@@ -455,6 +455,33 @@ Rules for this:
   so a tklr command gets invented to fill the space. Everything the user needs is
   in the block; everything else on screen is yours.
 
+## Offer the short name too
+
+The same blocks carry one more offer, when the name is free: a shortcut so the
+skill can be invoked without typing its full name. It is listed separately from
+the channels because nothing is delivered to it — it changes how the user reaches
+you, not where alerts land.
+
+```bash
+python3 $R shortcut            # the default short name
+python3 $R shortcut --name rem # if they want a different one
+```
+
+Rules for this:
+
+* **Only when they ask for it.** The offer is printed for you; running it is not
+  implied by the offer being there. It writes to the host's own configuration,
+  which is the user's file and not this skill's.
+* **It refuses a name that already resolves to something else**, and names what
+  holds it. That is not a problem to work around: pick another name with `--name`,
+  or drop it. A shortcut that shadows a command they already use is a worse
+  outcome than typing a few more characters.
+* **It does not work until the user restarts.** The host reads that configuration
+  once at startup. The block printed by `shortcut` says so; do not describe the
+  shortcut as working, and do not offer to restart anything yourself.
+* **Nothing about reminders depends on it.** If it fails, say so plainly and carry
+  on: the full name keeps working exactly as before.
+
 ## Closing out setup
 
 ```bash

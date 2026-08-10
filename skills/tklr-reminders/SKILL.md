@@ -145,8 +145,8 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    the name is not.
 3. **Everything goes through `$R`. Never call `tklr` yourself.** Subcommands:
    `add`, `edit`, `list`, `show`, `find`, `free`, `done`, `delete`, `move`,
-   `uses`, `channels`, `status`, `setup`, `email`, `welcome`. `python3 $R --help`
-   lists them.
+   `uses`, `channels`, `status`, `setup`, `email`, `shortcut`, `welcome`.
+   `python3 $R --help` lists them.
 
    **To change an existing reminder, use `edit`.** Never delete and re-add it:
    that is how the same reminder ends up on the schedule twice, and it throws
@@ -338,10 +338,11 @@ exits 0, everything above is done and there is nothing left to verify by hand.
 Then, and only then:
 
 1. **Send the `SEND EXACTLY THIS TO THE USER` block `setup` ends with, and
-   nothing else.** It already asks about the test alert and offers the channels
-   that have no letter yet — the two things this moment is for. `setup` created
-   the test alert; do not create another. **Setup counts as complete only once
-   they confirm one reached them, so wait for that before saying it worked.**
+   nothing else.** It already asks about the test alert, offers the channels
+   that have no letter yet, and offers a short name for the skill if one is
+   free — the things this moment is for. `setup` created the test alert; do not
+   create another. **Setup counts as complete only once they confirm one
+   reached them, so wait for that before saying it worked.**
 
    Every command that ends in a message prints one of these blocks. Everything
    above the line is working notes, yours and not theirs.
@@ -359,6 +360,11 @@ Then, and only then:
    `--email` and they confirmed it. With no himalaya account the block says email
    is supported and needs one; send that rather than dropping it. Other routes
    are added with the `channels --set` command printed beside each one.
+
+   If they accepted the short name, `python3 $R shortcut` registers it. That one
+   changes the host's configuration rather than anything about reminders, and
+   the new name does nothing until the user restarts — the block it prints says
+   so, so send it and leave the restart to them.
 3. `welcome --no-test` prints what to tell the user, built from the channels
    that now exist — so it must run **last**, after any channel added in step 2.
    **Send its output verbatim.** It is the answer to "how do I use this", and

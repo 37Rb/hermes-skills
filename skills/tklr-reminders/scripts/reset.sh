@@ -20,6 +20,7 @@
 #   6. the cached skill prompt index      (~/.hermes/.skills_prompt_snapshot.json)
 #   7. the ENTIRE tklr workspace          (~/.config/tklr — config AND database)
 #   8. tklr itself, only if uv owns it AND this skill installed it
+#   9. the /tklr shortcut, only if it points at this skill
 #
 # HOST-SPECIFIC, all of it: every path above is Hermes layout and the cron
 # calls are Hermes' scheduler. This is a test-harness script rather than part
@@ -158,6 +159,13 @@ if command -v tklr >/dev/null 2>&1; then
         echo "  (This skill installs tklr only with uv.)"
     fi
 fi
+# Surveyed here as well as removed below, and not only for the listing: FOUND
+# gates the whole run, so a machine whose ONLY leftover is the shortcut would
+# otherwise be reported pristine with the shortcut still registered -- the exact
+# lie this script exists to prevent.
+SHORTCUT_TARGET=$(timeout 60 hermes config get quick_commands.tklr.target 2>/dev/null || true)
+[[ "$SHORTCUT_TARGET" == "tklr-reminders" ]] && \
+    { echo "  - /tklr shortcut in the host config"; FOUND=1; }
 [[ -f "$USAGE_JSON" ]] && grep -q "tklr-reminders" "$USAGE_JSON" 2>/dev/null && \
     { echo "  - usage registration in $USAGE_JSON"; FOUND=1; }
 [[ -f "$SUGGESTIONS" ]] && grep -q "tklr" "$SUGGESTIONS" 2>/dev/null && \
@@ -363,6 +371,31 @@ if command -v tklr >/dev/null 2>&1; then
     fi
 else
     skip "tklr not on PATH"
+fi
+
+# ------------------------------------------------------- 9. short-name shortcut
+step "short-name shortcut"
+# Removed for the same reason the workspace pin is: a from-scratch test that
+# finds this already registered never prints the offer, so the offer goes
+# untested and the run still reports success. Ownership is checked exactly as
+# the tklr package is above — a name pointing anywhere other than this skill
+# belongs to something else and is left strictly alone. SHORTCUT_TARGET was
+# read during the survey.
+if [[ "$SHORTCUT_TARGET" == "tklr-reminders" ]]; then
+    act "hermes config unset quick_commands.tklr"
+    if [[ $DRY_RUN -eq 0 ]]; then
+        timeout 60 hermes config unset quick_commands.tklr >/dev/null 2>&1
+        if [[ -n "$(timeout 60 hermes config get quick_commands.tklr.target 2>/dev/null || true)" ]]; then
+            echo "    STILL THERE — remove it by hand: hermes config unset quick_commands.tklr"
+        else
+            echo "    removed (confirmed gone from 'hermes config get')"
+        fi
+    fi
+elif [[ -n "$SHORTCUT_TARGET" ]]; then
+    echo "  LEAVING ALONE: /tklr points at $SHORTCUT_TARGET"
+    echo "    that is not this skill, so something else registered it."
+else
+    skip "no /tklr shortcut registered"
 fi
 
 # The skill source directory is deliberately absent from this script's removal

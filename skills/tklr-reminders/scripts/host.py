@@ -16,6 +16,8 @@ Three things do need a host, and all three live here:
      `cron_job_present`, `create_cron_job`.
   3. HOST PATHS -- where a scheduled script must live, and where its log goes.
      `dispatcher_path`, `LOG_PATH`.
+  4. THE SHORT NAME -- register a second, shorter way to invoke this skill.
+     `alias_target`, `create_alias`, `alias_pending`.
 
 PORTING TO ANOTHER AGENT
 Rewrite the bodies in this file; change nothing else. Each function's docstring
@@ -33,6 +35,9 @@ calls, so they keep working untouched. Concretely, a port needs:
     hand. `dispatcher_path` exists only because Hermes' scheduler refuses any
     script outside `~/.hermes/scripts/`; a host without that restriction can
     return the skill's own copy and the deploy step becomes a no-op.
+  * the short name: entirely optional. A host with no notion of a command
+    shortcut should have `alias_target` return the skill's own name, which
+    reads as "already registered" and removes the offer everywhere.
 
 What a port must NOT do is reach past this file. If a new host call is needed,
 add it here rather than at the point of use -- the value of one adapter is that
@@ -325,3 +330,95 @@ def create_cron_job() -> tuple[bool, str]:
 def schedule_hint() -> str:
     """How to inspect the schedule by hand, for an error message."""
     return f"`{HOST_CLI} cron list`"
+
+
+# --------------------------------------------------------------------------
+# Seam 4: the short name
+# --------------------------------------------------------------------------
+
+# What the host registers this skill as, and the shorter name worth offering.
+# SKILL_COMMAND must match the skill directory / frontmatter name: it is what
+# the shortcut resolves to, and a wrong value here produces a shortcut that
+# expands to nothing.
+SKILL_COMMAND = "tklr-reminders"
+ALIAS_NAME = "tklr"
+
+# What the user has to do before a new shortcut resolves, in words that reach
+# them. Here rather than at the point of use because "the gateway" is this
+# host's vocabulary: a port whose shortcut is live immediately sets this to ""
+# and every sentence built from it drops the caveat.
+RESTART_PHRASE = "restart the gateway"
+
+
+def alias_target(name: str = ALIAS_NAME) -> str | None:
+    """What invoking the short `name` currently runs, or None if nothing does.
+
+    None means the name is free. Any other string means it is taken -- by this
+    skill on an earlier run, or by something else entirely -- and either way it
+    is not ours to claim, so callers offer nothing.
+
+    A host that cannot answer should return the skill's own name rather than
+    None: an unanswerable question must not read as a free name, or the offer
+    appears on every run and creating it fails every time.
+    """
+    try:
+        proc = _run([HOST_CLI, "config", "get",
+                     f"quick_commands.{name}.target"], READ_TIMEOUT)
+    except HostError:
+        # Cannot ask -> do not offer. Same reasoning as the docstring above:
+        # silence is the safe answer, and the shortcut is a convenience whose
+        # absence costs nothing.
+        return SKILL_COMMAND
+    if proc.returncode != 0:
+        return None
+    return (proc.stdout or "").strip() or None
+
+
+def create_alias(name: str = ALIAS_NAME) -> tuple[bool, str]:
+    """Register the short `name` as a second way to invoke this skill.
+
+    (ok, one line saying what happened). Verified by reading the value back
+    through the host rather than by trusting the exit code, because the write
+    and the read are the same seam and a shortcut that did not land has no
+    symptom until the user types it and nothing happens.
+
+    Callers must check `alias_target()` first: this overwrites whatever the
+    name pointed at.
+
+    Note for a port: on Hermes this goes through the host's own supported
+    config command, which is what the host tells every user and its own
+    bundled skills to use. That command rewrites the config file and drops
+    the user's comments as it does so (upstream #50698 / #63039). That is the
+    host's behaviour on the path it documents, not something this skill can
+    route around -- writing the file directly is what the host explicitly
+    tells agents never to do.
+    """
+    for key, value in ((f"quick_commands.{name}.type", "alias"),
+                       (f"quick_commands.{name}.target", SKILL_COMMAND)):
+        try:
+            proc = _run([HOST_CLI, "config", "set", key, value], WRITE_TIMEOUT)
+        except HostError as exc:
+            return False, str(exc)
+        if proc.returncode != 0:
+            return False, (f"`{HOST_CLI} config set {key}` failed: "
+                           f"{(proc.stderr or '').strip()}")
+    landed = alias_target(name)
+    if landed != SKILL_COMMAND:
+        return False, (f"`{HOST_CLI} config set` reported success but the "
+                       f"shortcut reads back as {landed!r}")
+    return True, f"'{name}' now invokes {SKILL_COMMAND}"
+
+
+def alias_pending(name: str = ALIAS_NAME) -> str:
+    """What still has to happen before a just-created shortcut works.
+
+    Empty string if a port's shortcut takes effect immediately. On Hermes the
+    gateway reads this config once at startup, so the shortcut exists on disk
+    and does nothing until a restart -- which is the user's to run, not the
+    skill's. Saying so is the difference between a shortcut that looks broken
+    and one the user knows to expect after the next restart.
+    """
+    if not RESTART_PHRASE:
+        return ""
+    return (f"'{name}' is written, but this config is only read at startup, so "
+            f"the user has to {RESTART_PHRASE} themselves before it works.")

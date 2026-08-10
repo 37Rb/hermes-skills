@@ -1605,8 +1605,9 @@ def cmd_setup(args, home: Path, now: datetime) -> int:
         print("\n(--no-test: skipped the delivery test. Nothing has proven that "
               "an alert\ncan actually reach the user.)")
         routes = print_routes(home, args.email)
+        shortcut = print_shortcut()
         print_relay(f"Your reminders will arrive on {channels_phrase(home)}.",
-                    offer_sentence(routes), email_unavailable(home))
+                    offer_sentence(routes), email_unavailable(home), shortcut)
         return 0
 
     rc = create_test_alert(args.letter, home, now)
@@ -1616,6 +1617,7 @@ def cmd_setup(args, home: Path, now: datetime) -> int:
             "Report this as a failure: nothing has proven an alert can reach "
             "them, so setup is not complete.")
     routes = print_routes(home, args.email)
+    shortcut = print_shortcut()
     # Opens like a reply, deliberately. A block that starts mid-thought invites
     # a preamble, and the preamble is where "setup is complete!" gets announced
     # -- two lines above the sentence asking whether the test alert arrived.
@@ -1625,7 +1627,7 @@ def cmd_setup(args, home: Path, now: datetime) -> int:
         f"{channels_phrase(home)}, and I have just sent a test one. Tell me "
         "when it turns up, since whether it actually reaches you is the one "
         "thing I cannot check from here.",
-        offer_sentence(routes), email_unavailable(home))
+        offer_sentence(routes), email_unavailable(home), shortcut)
     return 0
 
 
@@ -1881,6 +1883,32 @@ def offer_sentence(routes: list[Route]) -> str:
     return f"{sentence} {asks}".strip()
 
 
+def print_shortcut() -> str:
+    """Print the shortcut route for the agent; return the offer for the user.
+
+    A shortcut is not a channel, so it is not a Route: nothing is delivered to
+    it and `offer_sentence` would say "I can also send them to /tklr". It gets
+    its own block for the same reason the channel routes have one -- an agent
+    that has just read "setup complete" does not go looking for anything, so
+    what it should offer has to arrive in output it already reads.
+
+    Empty when the name is taken. Taken by us and taken by another skill are
+    the same answer to the user: nothing to offer.
+    """
+    short = host.ALIAS_NAME
+    if host.alias_target() is not None:
+        return ""
+    print("\nA shorter way to reach this skill, not set up yet:")
+    print(f"  · '{short}' as a second name for '{host.SKILL_COMMAND}'")
+    print(f"      python3 {SELF} shortcut")
+    print("      (only if they want it. It writes to the host's config, and")
+    print("       anything the USER must do afterwards is in the offer.)")
+    after = (f", though it only starts working once you {host.RESTART_PHRASE}"
+             if host.RESTART_PHRASE else "")
+    return (f"If the long name is a nuisance to type, I can register /{short} "
+            f"as a shortcut for it{after} — say the word and I will.")
+
+
 def channels_phrase(home: Path) -> str:
     """"your chat and email at alex@example.com" — the configured destinations."""
     described = describe_channels(configured_letters(home))
@@ -1893,10 +1921,11 @@ def channels_phrase(home: Path) -> str:
 
 RELAY_RULE = (
     "Nothing above the line is for the user. If what you send contains "
-    "`tklr`,\n`python3`, a `--flag`, an `@` token or a code fence, you have "
-    "written the wrong\nthing: they never type a command. They talk to you, and "
-    "you compose it. When\nthey ask how to use this, the answer comes from "
-    "`welcome`, not from you.")
+    "`tklr`\nanywhere except immediately after a `/`, or contains `python3`, a "
+    "`--flag`, an\n`@` token or a code fence, you have written the wrong thing. "
+    "A `/shortcut` is\nthe one thing they ever type; everything else they say "
+    "in words, and you\ncompose the command. When they ask how to use this, the "
+    "answer comes from\n`welcome`, not from you.")
 
 
 def print_relay(*paragraphs: str) -> None:
@@ -2005,11 +2034,58 @@ def print_added_relay(home: Path, added: str, tested: bool,
     Nothing was left for the agent to say, so it invented something.
     """
     routes = print_routes(home, known_email)
+    shortcut = print_shortcut()
     test = (f" I have sent a test to {added}; tell me when it arrives, since "
             "that is the one thing I cannot check from here." if tested else "")
     print_relay(f"Done — your reminders will now reach you on "
                 f"{channels_phrase(home)}.{test}",
-                offer_sentence(routes), email_unavailable(home))
+                offer_sentence(routes), email_unavailable(home), shortcut)
+
+
+def cmd_shortcut(args, home: Path, now: datetime) -> int:
+    """Register a short second name for this skill on the host.
+
+    Deliberately a command of its own rather than a step inside `setup`: it
+    changes the host's configuration rather than the skill's, it is worth
+    nothing to a user who never types the long name, and it cannot be undone
+    by `reset.sh` on a machine where the user has since pointed the same name
+    somewhere else. Offered everywhere, run only when asked.
+    """
+    short = args.name.strip().lstrip("/")
+    if not short:
+        die("--name cannot be empty")
+    # Refused rather than overwritten. The name lives in the user's own config
+    # alongside shortcuts this skill knows nothing about, and silently taking
+    # one that already resolves elsewhere breaks a command they rely on to fix
+    # the typing of a command they do not.
+    taken = host.alias_target(short)
+    if taken == host.SKILL_COMMAND:
+        print(f"'{short}' already invokes {host.SKILL_COMMAND} — nothing to do.")
+        print_relay(f"You can already reach me with /{short}.")
+        return 0
+    if taken is not None:
+        die(f"'{short}' is already registered, and it points at {taken!r}",
+            "Not ours to take: something else on this machine answers to that",
+            "name. Pick another with --name, or leave it alone.")
+
+    ok, note = host.create_alias(short)
+    print(note)
+    if not ok:
+        die("the shortcut was not registered.",
+            "Report that plainly — nothing about reminders is affected, and",
+            "the long name keeps working exactly as before.")
+    pending = host.alias_pending(short)
+    if pending:
+        print(f"  note: {pending}")
+    if host.RESTART_PHRASE:
+        print_relay(
+            f"Done — /{short} now points at this skill. It will not do anything "
+            f"until you {host.RESTART_PHRASE}, though, since that config is "
+            f"only read at startup. Do that whenever suits you and /{short} "
+            "will work from then on.")
+    else:
+        print_relay(f"Done — you can now reach me with /{short}.")
+    return 0
 
 
 def describe_channels(letters: dict[str, str]) -> list[str]:
@@ -2260,7 +2336,8 @@ def cmd_status(args, home: Path, now: datetime) -> int:
     if letters:
         routes = print_routes(home, args.email)
         say = " ".join(x for x in (offer_sentence(routes),
-                                   email_unavailable(home)) if x)
+                                   email_unavailable(home),
+                                   print_shortcut()) if x)
         if say:
             print(f"\nWorth saying next time you speak to the user:\n  \"{say}\"")
     return 0
@@ -2645,6 +2722,26 @@ def main() -> int:
                     help="skip the delivery test (leaves delivery unproven)")
     em.set_defaults(fn=cmd_email)
 
+    sc = sub.add_parser(
+        "shortcut",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="register a short second name for this skill on the host",
+        description=(
+            "Register a short second name, so the skill can be invoked without\n"
+            "typing the full one. Changes the HOST's configuration, not the\n"
+            "skill's or tklr's: nothing about reminders, channels or delivery\n"
+            "is affected, and removing it later is a host matter too.\n"
+            "\n"
+            "Run this only when the user has asked for it. It refuses a name\n"
+            "that already resolves to anything else, and the new name does not\n"
+            "work until the user restarts the gateway themselves."),
+        epilog=("examples:\n"
+                "  %(prog)s                short name 'tklr'\n"
+                "  %(prog)s --name rem     some other short name\n"))
+    sc.add_argument("--name", default=host.ALIAS_NAME,
+                    help=f"the short name (default {host.ALIAS_NAME})")
+    sc.set_defaults(fn=cmd_shortcut)
+
     w = sub.add_parser(
         "welcome",
         help="print what to tell the user this does — send its output verbatim")
@@ -2678,9 +2775,10 @@ def main() -> int:
             "XDG_CONFIG_HOME for everything, not for this one command.")
     home = tklr_home(args.home)
     # `setup` is the command that CREATES the workspace, so it cannot require
-    # one. Everything else does — operating on a missing workspace produces
+    # one, and `shortcut` only touches the host, so it does not need one either.
+    # Everything else does — operating on a missing workspace produces
     # confusing tklr errors rather than an obvious one.
-    if args.cmd != "setup" and not (home / "tklr.db").exists():
+    if args.cmd not in ("setup", "shortcut") and not (home / "tklr.db").exists():
         die(f"no workspace at {home}",
             "Run: tklr_agent_wrapper.py setup --platform <the platform you are on>")
     return args.fn(args, home, datetime.now())

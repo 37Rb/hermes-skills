@@ -2350,6 +2350,69 @@ def cmd_status(args, home: Path, now: datetime) -> int:
     return 0
 
 
+def cmd_health_check(args, home: Path, now: datetime) -> int:
+    """Everything the scheduled health check does, in one command.
+
+    Exists so the blueprint prompt can name a command instead of listing steps.
+    A numbered procedure stored in this file's frontmatter is read as the
+    procedure for whatever the agent is doing now: on 2026-08-10 an agent
+    answering `/tklr-reminders setup` ran the blueprint's two steps in order,
+    including a poller that a reset had deleted, then improvised from a
+    directory listing. Steps the agent cannot see cannot be followed at the
+    wrong moment.
+
+    Silent when healthy, because the cron job is `--no-agent` and anything
+    printed is delivered. Every line it does print names a problem.
+    """
+    problems: list[str] = []
+
+    if not (home / "tklr.db").exists():
+        problems.append(f"no tklr workspace at {home} — nothing is set up")
+        for p in problems:
+            print(p)
+        print("Tell the user to run /tklr-reminders setup.")
+        return 1
+
+    if not configured_letters(home):
+        problems.append("no alert channels defined — no reminder can notify anyone")
+
+    poller = POLLER
+    source = SKILL_SCRIPTS / "tklr_alert_poller.py"
+    if not poller.exists():
+        problems.append("the alert dispatcher is not installed")
+    elif source.is_file() and poller.read_bytes() != source.read_bytes():
+        problems.append("the installed alert dispatcher is out of date vs the skill")
+
+    cron = cron_job_present()
+    if cron is False:
+        problems.append(f"the '{CRON_JOB_NAME}' job is not scheduled — "
+                        "NOTHING WILL BE DELIVERED")
+    elif cron is None:
+        problems.append(f"could not read {host.schedule_hint()} to confirm the "
+                        "dispatcher is scheduled")
+
+    # The heal is the other half of the old step 2. It rebuilds and sends
+    # nothing, and is only meaningful once the dispatcher is deployed.
+    if poller.exists():
+        export_tklr_home(home)
+        try:
+            proc = subprocess.run([sys.executable, str(poller), "--heal"],
+                                  capture_output=True, text=True, timeout=180)
+            if proc.returncode != 0:
+                problems.append("the dispatcher could not rebuild stale alerts: "
+                                + (proc.stderr or "").strip()[:200])
+        except (OSError, subprocess.SubprocessError) as exc:
+            problems.append(f"could not run the dispatcher: {exc}")
+
+    if not problems:
+        return 0
+    for p in problems:
+        print(p)
+    print("Tell the user to run /tklr-reminders setup, which rebuilds all of it. "
+          "Do not repair it yourself.")
+    return 1
+
+
 def cmd_add(args, home: Path, now: datetime) -> int:
     if not args.type:
         die("--type is required", code=2)
@@ -2696,6 +2759,11 @@ def main() -> int:
     st.add_argument("--email", help=EMAIL_HELP)
     st.set_defaults(fn=cmd_status)
 
+    hc = sub.add_parser(
+        "health-check",
+        help="scheduled use only: check delivery and heal, silent when healthy")
+    hc.set_defaults(fn=cmd_health_check)
+
     su = sub.add_parser(
         "setup",
         help="configure the platform you are talking on as an alert channel")
@@ -2787,7 +2855,10 @@ def main() -> int:
     # one, and `shortcut` only touches the host, so it does not need one either.
     # Everything else does — operating on a missing workspace produces
     # confusing tklr errors rather than an obvious one.
-    if args.cmd not in ("setup", "shortcut") and not (home / "tklr.db").exists():
+    # `health-check` reports a missing workspace as its own finding rather than
+    # dying, because that is exactly the condition it exists to notice.
+    if (args.cmd not in ("setup", "shortcut", "health-check")
+            and not (home / "tklr.db").exists()):
         die(f"no workspace at {home}",
             "Run: tklr_agent_wrapper.py setup --platform <the platform you are on>")
     return args.fn(args, home, datetime.now())

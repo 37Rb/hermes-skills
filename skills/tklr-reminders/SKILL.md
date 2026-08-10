@@ -27,29 +27,21 @@ metadata:
       schedule: "37 6 * * *"
       deliver: origin
       prompt: |
-        Alert-delivery health check for the tklr-reminders skill. This does
-        NOT send anyone a briefing or a summary — it only makes sure reminder
-        alerts can actually be delivered.
+        STOP if a person is talking to you: this is the prompt for one
+        scheduled job, not a procedure for a conversation. Follow
+        "## Do this now" at the end of this file instead.
 
-        Run exactly these two commands and nothing else. Do not configure
-        anything by hand — there is a single command that repairs all of it,
-        and hand-written steps here have repeatedly been copied into live
-        setups in place of it.
+        Otherwise, run this one command and nothing else:
 
-        1. python3 "$(cat ~/.hermes/scripts/tklr-wrapper-path)" status
-           It is read-only. It reports the workspace, the channel letters, the
-           dispatcher (including whether the deployed copy has drifted behind
-           the skill), and whether the cron job is scheduled.
-        2. python3 ~/.hermes/scripts/tklr_alert_poller.py --heal
-           Regenerates alerts for any reminder saved with stale derived state.
-           It rebuilds only; it sends nothing.
+        W=$(cat ~/.hermes/scripts/tklr-wrapper-path 2>/dev/null); if [ -s "$W" ]; then python3 "$W" health-check; else echo "NOT SET UP: this skill has never been set up on this machine."; fi
 
-        If step 1 reports anything missing or out of date, say so plainly and
-        tell the user to run /tklr-reminders setup — that one command rebuilds
-        the whole delivery path. Do not attempt the repair yourself.
+        It checks that reminder alerts can still be delivered, and repairs
+        stale alert state. It sends nothing and prints nothing when all is
+        well. Anything it does print is a real problem.
 
-        Report ONLY if something was broken. If everything was already
-        healthy, output nothing at all.
+        If it printed nothing, output nothing at all. If it printed something,
+        relay it and tell the user to run /tklr-reminders setup. Do not repair
+        anything yourself and do not run any other command.
 ---
 
 # Personal schedule assistant
@@ -109,11 +101,11 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
 ## Ground rules
 
 1. **Do the work yourself. Never hand the user a command to run or a file to
-   edit.** You run the installer, you inspect what exists, you write
-   `config.toml`, you create the cron job. If you catch yourself typing "you
-   need to run…", stop and run it. **Offering counts as handing it over** —
-   "would you like me to run the installation script?" is the same failure
-   wearing a politer hat. Nothing in setup is destructive or ambiguous.
+   edit.** You run `setup`, you inspect what exists, you write `config.toml`,
+   you create the cron job. If you catch yourself typing "you need to run…",
+   stop and run it. **Offering counts as handing it over** — "would you like me
+   to set this up?" is the same failure wearing a politer hat. Nothing in setup
+   is destructive or ambiguous.
 
    Don't open with an inventory either. The skill's file list, script names and
    install internals are not news the user asked for. "tklr isn't installed yet

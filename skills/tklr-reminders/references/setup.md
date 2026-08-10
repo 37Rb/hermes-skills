@@ -260,9 +260,11 @@ alert actually arrived, which is the one thing you cannot check.
 
 ## First-run setup
 
-**Never run `install.sh`. `setup` runs it for you.** There is no case where you
-run it by hand, so this section contains no command for it: what follows is what
-it does and how to read its failures when `setup` reports one.
+**Never run `install.sh`. `setup` runs it for you.** Running it alone leaves a
+machine with tklr present, no alert channel and no dispatcher scheduled, which
+reports healthy and delivers nothing. There is no case where you run it by hand,
+so this section contains no command for it: what follows is what it does and how
+to read its failures when `setup` reports one.
 
 It is idempotent. It installs tklr with
 `uv tool install --python '>=3.12' tklr-dgraham`, creates the workspace, copies

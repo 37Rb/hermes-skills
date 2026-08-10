@@ -5,7 +5,15 @@ category: productivity
 # (SKILL_PROMPT_DESC_LIMIT=60, truncated to desc[:57]+"..."), so they stay
 # exactly as tuned: pure routing signal. The requirement sits after the cut,
 # where Hermes drops it for free and ClawHub still shows it in full.
-description: "calendar, schedule, events, appointments, tasks, alerts. Requires Hermes Agent."
+#
+# One word per itemtype that a user's own phrasing would reach, and nothing
+# spent twice. "appointments" was sold to buy "notes" and "goals": calendar,
+# schedule and events already cover it, while note, jot and goal had no word
+# at all and so could never be selected for. "notes" carries jot as well --
+# people say "note" for both. project rides on "tasks", being tasks with
+# steps. Budget is 57 chars and it is full, so anything added here has to be
+# paid for by something removed.
+description: "calendar, schedule, events, tasks, notes, goals, alerts. Requires Hermes Agent."
 version: 1.0.0
 platforms: [linux, macos]
 metadata:

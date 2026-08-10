@@ -165,7 +165,7 @@ All verified against tklr 1.0.43. `R` is `scripts/tklr_agent_wrapper.py`.
 | "Team meeting at 2, 30 min travel each way" | `--type event --subject "Team meeting" --when "2026-08-06 2pm" --duration 1h --travel "30m,30m" --for alex --alert 1h --via r` |
 | "Note: Sam prefers morning meetings" | `--type note --subject "Sam prefers morning meetings" --for alex` |
 | "Jot down that I am taking a walk" | `--type jot --subject "Taking a walk" --for alex` (timestamped now; pass `--when` for a different time) |
-| "That walk took an hour and a quarter, count it as exercise" | `--type jot --subject "Taking a walk" --duration 1h15m --use exercise.walking --for alex` |
+| "That walk took an hour and a quarter, count it as exercise" | this follows the row above, so it edits that jot rather than filing a second one: `edit <id> --duration 1h15m --use exercise.walking` |
 | "Where did my time go this month?" | `uses` (add `--use exercise` to filter, `--months 2607-2608` for a range) |
 
 ## Changing and completing things
@@ -305,8 +305,9 @@ does.
 | `--duration` | how long it lasts |
 | `--alert` / `--via` | offsets and channels; see below |
 | `--for` | who it is for, replacing the current people |
+| `--use` | jots only: the time-tracking category. This is the half of a jot that arrives late, once the thing being logged is over |
 | `--note`, `--location`, `--priority`, `--notice`, `--offset`, `--travel`, `--repeat` | that field |
-| `--clear <field,…>` | removes fields entirely: `duration`, `repeat`, `location`, `priority`, `notice`, `offset`, `travel`, `note`, `people`, `alerts` |
+| `--clear <field,…>` | removes fields entirely: `duration`, `repeat`, `location`, `priority`, `notice`, `offset`, `travel`, `note`, `people`, `alerts`, `use` |
 | `--dry-run` | prints the before and after entry, changes nothing |
 
 **`--alert` and `--via` carry the other half over.** `--via r,e` alone keeps the

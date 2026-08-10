@@ -99,6 +99,31 @@ ITEMTYPE = {
     # downgraded invalid entry gets caught.
 }
 
+TYPENAME = {char: name for name, char in ITEMTYPE.items()}
+
+
+def use_token(use: str, type_name: str) -> str:
+    """Validate a time-tracking category and return the token that sets it.
+
+    Shared by add and edit so the two cannot drift. They reach it from
+    different directions -- add knows the type because it was asked for one,
+    edit reads it off the stored entry -- so the caller resolves the name and
+    this only judges the pair.
+    """
+    use = use.strip()
+    # tklr enforces the type rule itself ("The use of @u is not supported in
+    # type '~' reminders"), but failing here names the right alternative.
+    if type_name != "jot":
+        die(f"--use only means something on a jot; this is a {type_name}.",
+            "Jots are tklr's time-tracking type: a timestamped line, how",
+            "long it took (--duration), and the category it counts toward.")
+    if not re.fullmatch(r"[A-Za-z0-9][\w.-]*", use):
+        die(f"--use {use!r} is not a use name",
+            "Letters, digits, dots, dashes and underscores, no spaces.",
+            "A dot nests it: exercise.walking totals under exercise.")
+    return f"@u {use}"
+
+
 WEEKDAYS = {
     "monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1,
     "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
@@ -523,18 +548,7 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
                         "(pass --alert and --via if it should)")
 
     if args.use:
-        use = args.use.strip()
-        # tklr enforces this itself ("The use of @u is not supported in type
-        # '~' reminders"), but failing here names the right alternative.
-        if args.type != "jot":
-            die(f"--use only means something on a jot; this is a {args.type}.",
-                "Jots are tklr's time-tracking type: a timestamped line, how",
-                "long it took (--duration), and the category it counts toward.")
-        if not re.fullmatch(r"[A-Za-z0-9][\w.-]*", use):
-            die(f"--use {use!r} is not a use name",
-                "Letters, digits, dots, dashes and underscores, no spaces.",
-                "A dot nests it: exercise.walking totals under exercise.")
-        parts.append(f"@u {use}")
+        parts.append(use_token(args.use, args.type))
 
     if args.note:
         # @d must come last: tklr treats the rest of the entry as its value.
@@ -933,7 +947,7 @@ def split_alert_token(value: str | None) -> tuple[list[str], list[str]]:
 CLEARABLE = {
     "duration": "e", "repeat": "r", "location": "l", "priority": "p",
     "notice": "n", "offset": "o", "travel": "w", "note": "d",
-    "people": "b", "alerts": "a", "alert": "a",
+    "people": "b", "alerts": "a", "alert": "a", "use": "u",
 }
 
 
@@ -983,6 +997,13 @@ def cmd_edit(args, home: Path, now: datetime) -> int:
 
     if args.repeat:
         sets.append(f"@r {args.repeat.strip()}")
+
+    if args.use:
+        # The type comes off the stored entry rather than a flag: this is the
+        # half of a jot that arrives late. Capture is a few words while
+        # something is happening, and what it counts toward is usually known
+        # only once it is over.
+        sets.append(use_token(args.use, TYPENAME.get(entry[:1], "reminder")))
 
     if args.location:
         sets.append(f"@l {args.location.strip()}")
@@ -2038,6 +2059,16 @@ important — start warning me a month out." Bigger jobs can have steps I track
 together — "plan the Colorado trip: flights, hotel, dog sitter" — and I can
 keep habits honest too: "I want to exercise three times a week."
 
+**Things worth keeping.** "Remember that the wifi password is on the back of
+the router" files a note. It has no schedule and sends no alerts; it is there
+for when you go looking, and "what was that quote about pigs?" will find it
+again. A jot is the other half of that: a line logged the moment something
+happens, stamped with the time, like "jot down that the well pump was making a
+grinding noise". "Spent two hours on the Henderson invoices" logs the time and
+what it counts toward in one go, or you can fill that in once it's over: "that
+walk was an hour and a quarter, count it as exercise". Then "where did my time
+go this month?" adds it all up.
+
 **Asking me things.** "What's on my calendar today?" "What about tomorrow?"
 "How's my week looking?" "What do I need to get done?" "When's my next dentist
 appointment?" "Am I free Tuesday at 3 for a coffee date?" — for that last one
@@ -2537,6 +2568,8 @@ def main() -> int:
     e.add_argument("--alert", help="new offsets BEFORE the start, e.g. 1d,1h")
     e.add_argument("--via", help="new channel letters, e.g. r,e. Given alone, "
                                  "the existing offsets are kept")
+    e.add_argument("--use", help="for jots: the time-tracking category it counts "
+                   "toward, e.g. exercise.walking (a dot nests it under exercise)")
     e.add_argument("--note", help="free-text detail")
     e.add_argument("--location", help="where")
     e.add_argument("--priority", type=int, help="1 (highest) to 5 (lowest)")

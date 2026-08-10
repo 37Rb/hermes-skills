@@ -135,10 +135,7 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    So: take the name for `--for` from **this conversation**. If you need one and
    nobody has said it, ask — "whose calendar is this?" — once. Never greet
    someone by a remembered name, and never infer what they want reminders about
-   from remembered projects. A live test opened with "Thanks for the
-   clarification, Amanda!" to a user named Ryan and spent the session
-   researching book marketing instead of setting up reminders; both came from
-   memory, and neither had been mentioned.
+   from remembered projects.
 
    Other people in memory are still useful for `--for` once the user brings them
    up — "remind Amanda too" is a fine reason to use the name. Memory supplying
@@ -152,21 +149,9 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    that is how the same reminder ends up on the schedule twice, and it throws
    away the id and the completion history. `edit` changes only the fields you
    name.
-
-   Calling `tklr` directly is how every silent failure in this skill has
-   happened: a missing itemtype character becomes a draft, `tomorrow 3p` is
-   rejected, a missing `@a` means nobody is ever notified, `add` reports
-   "Added 0 entries successfully" and looks like success. `$R` resolves dates,
-   assembles the grammar, validates, reads the output, refuses drafts, and
-   heals.
 4. **Load `references/using-the-wrapper.md` before composing any command.**
-   The flags, the worked examples, and what each subcommand covers live there,
-   deliberately not here — so that paste-shaped command examples are in front
-   of you when you are writing a command, and nowhere near you when you are
-   writing to the user.
+   The flags, the worked examples, and what each subcommand covers live there.
 5. **Never run `tklr ui`.** It is a full-screen app that will hang the terminal.
-   Alerts in tklr normally require the UI; this skill replaces that with a
-   cron-driven dispatcher, which is why the UI is never needed.
 6. **Never report success from silence — and never explain away an anomaly.**
    The dispatcher prints nothing when it has nothing to do, so no output does
    not mean an alert was sent. If a command says something you did not expect,
@@ -174,10 +159,7 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    trigger time may be calculated differently" is how a broken setup gets
    reported as working.
 7. **Report what happened, not what you intended.** Read times back from tklr
-   with `$R show <id>` rather than restating your plan. The two have diverged in
-   every way possible: an alert described as "in 5 minutes" that fired 65
-   minutes later, a tool "installed with pipx" that was installed with uv, a
-   test that "passed" having sent nothing.
+   with `$R show <id>` rather than restating your plan.
 8. **Configure alert channels before creating reminders that use them.** `$R
    channels` lists what exists. You do not have to remember this: `add` and
    `edit` refuse an undefined letter and name the ones that are configured.
@@ -200,36 +182,20 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
 | `references/using-the-wrapper.md` | **every command you run** — load before composing one |
 | `references/setup.md` | the whole setup procedure — load when setup is incomplete |
 | `references/how-it-works.md` | delivery mechanism, healing, SQLite, failure table |
-| `references/tklr-syntax.md` | underlying tklr grammar; only needed for `--raw` |
 | `templates/alerts-config-example.toml` | commented `[alerts]` reference |
-
-This list is also load-bearing for distribution: a hub install fetches only the
-support files named in **this** file, and does not follow links out of them. A
-file that stops being mentioned here stops being shipped.
 
 ## How to talk about this skill
 
-**Run `python3 $R welcome` and send its output.** That is the rule. The rest of
-this section is why, for when you are tempted.
+**Run `python3 $R welcome` and send its output.**
 
 The same applies mid-setup: `setup`, `email` and `channels --set` each end with a
-`SEND EXACTLY THIS TO THE USER` block. Send it. A run that had just configured
-email perfectly signed off by teaching the user a tklr command that does not even
-parse — invented in the one gap where nothing had told it what to say.
+`SEND EXACTLY THIS TO THE USER` block. Send it.
 
 **The hard test: your reply to the user contains no commands.** Before sending
 anything that describes this skill, scan it. If it contains `python3`, `tklr`,
 `tklr_agent_wrapper.py`, `$R`, a `--flag`, a file path, or a fenced code block,
 it is wrong — delete it and send `welcome`'s output instead. There is no version
-of "here's the template, fill in the subject" that is acceptable. A user who has
-to compose flags does not have an assistant; they have a CLI with extra steps.
-
-This is the most common failure in this skill, and it fails *plausibly* — the
-commands look helpful, and some of them even work. Two reasons it is still
-wrong. It hands over the traps along with the commands: the moment they type one
-themselves, an unresolved `tomorrow`, a missing `--via`, or a stray quote becomes
-their problem, silently. And it is unnecessary — they are already talking to
-you, which is the interface.
+of "here's the template, fill in the subject" that is acceptable.
 
 **When they ask for examples suited to them**, the answer is still `welcome`'s
 shape, in their subject matter, phrased as things they can *say*: "remind me to
@@ -237,20 +203,9 @@ check the new land listings every morning at 9", "warn me a week before the
 manuscript deadline". Offering to create a few of those is good. Showing the
 invocation that would create them is the failure above.
 
-Bad — every line here is a mistake:
-
-> * Installed the tklr tool via pipx (version 1.043)
-> * How to use: `tklr add "* Dentist @s tomorrow 3p @a 1d, 1h: r"`
-
-* It names the implementation, which the user should never need to know.
-* It states the installer *wrongly* — this skill installs with uv, never pipx —
-  and mangles the version. Don't narrate mechanics you'd have to get right.
-* Worst, it teaches a command that **does not work**: `tomorrow 3p` is rejected
-  by tklr. Handing over commands means handing over the traps.
-
 Never give the user tklr syntax or wrapper flags, even when they ask how it
 works — describe the capability in plain words. If they explicitly want the
-underlying tool, name it and point at `references/tklr-syntax.md`; do not
+underlying tool, name it and point at its own documentation; do not
 improvise examples.
 
 ## Setup: check first, then load the guide
@@ -266,9 +221,7 @@ It reports the workspace, the channel letters, the dispatcher and the cron job,
 and sends nothing. Anything it prints in capitals is broken; no workspace at all
 means nothing is set up yet. Either way the repair is `setup --platform`, which
 is idempotent — run it rather than diagnosing. For anything else, **load
-`references/setup.md` and follow it.** Do not improvise setup from this file —
-the procedure is deliberately not here, because getting it wrong produces a
-system that looks configured and silently delivers nothing.
+`references/setup.md` and follow it.** Do not improvise setup from this file.
 
 **Never announce that setup is done without having seen an alert delivered.**
 The passing signal is `1 due, 1 sent` from the dispatcher plus the user
@@ -361,10 +314,8 @@ Then, and only then:
    is supported and needs one; send that rather than dropping it. Other routes
    are added with the `channels --set` command printed beside each one.
 
-   If they accepted the short name, `python3 $R shortcut` registers it. That one
-   changes the host's configuration rather than anything about reminders, and
-   the new name does nothing until the user restarts — the block it prints says
-   so, so send it and leave the restart to them.
+   If they accepted the short name, `python3 $R shortcut` registers it. Send the
+   block it prints; the restart it names is the user's to run.
 3. `welcome --no-test` prints what to tell the user, built from the channels
    that now exist — so it must run **last**, after any channel added in step 2.
    **Send its output verbatim.** It is the answer to "how do I use this", and

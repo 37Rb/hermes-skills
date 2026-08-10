@@ -12,8 +12,7 @@ Take the `R=` line from `SKILL.md`, where it is already resolved to a real path.
 Everything else hangs off it, so nothing below names a skill path directly:
 
 ```bash
-# R= ... comes from SKILL.md. This file is never template-substituted, so a
-# path written here would be a guess, and a wrong guess sends you to `tklr`.
+# R= ... comes from SKILL.md. Never write a skill path here from memory.
 S="$(dirname "$R")/set_alert_channel.py"
 P=~/.hermes/scripts/tklr_alert_poller.py
 H=~/.config/tklr
@@ -132,10 +131,9 @@ Either way, never default to the sending address and never invent one.
 
 When himalaya has no account at all, `email` refuses and the offer block replaces
 the offer with a plain statement: the skill supports email through himalaya, no
-account is set up here, and one can be added whenever they like. That sentence is
-not optional politeness — an unmentioned capability is one the user can never ask
-for. What it must not become is an improvised `hermes send --to email:…`, which
-is a separate and usually unconfigured mechanism.
+account is set up here, and one can be added whenever they like. Send that
+sentence. Never improvise `hermes send --to email:…` instead — it is a separate
+and usually unconfigured mechanism.
 
 **The rest of this section is for the cases neither command covers** — a second
 person's chat, a desktop letter, or a group chat. Same principles, done by hand.
@@ -153,11 +151,8 @@ command -v notify-send             # desktop notification available?
 ```
 
 **Start with the platform this conversation is on, and default to it** — see
-*The two commands* in `SKILL.md`. The unfiltered list is not a menu ranked by
-suitability: it prints platforms in its own order, and it happily lists one
-whose connection is dead. Reading it top-down is how a user chatting on
-Telegram gets offered Matrix. Use it to learn what *else* exists, which is
-Step 2's offer, not to pick the default.
+*The two commands* in `SKILL.md`. Use the unfiltered list only to learn what
+*else* exists, for Step 2's offer, never to pick the default.
 
 **Chat and email are two different mechanisms.** `hermes send` covers chat;
 `himalaya` covers email. Never mix them up:
@@ -173,7 +168,7 @@ Step 2's offer, not to pick the default.
   Hermes *platform* is a separate job most people have not done, and himalaya is the
   normal route regardless.
 
-**Two things about the email command, both verified the hard way:**
+**Two things about the email command:**
 
 1. **`From:` is mandatory** and must be the himalaya account's own address. Omit it
    and himalaya exits 1 with ``No `From:` header found in raw message`` — nothing is
@@ -190,10 +185,8 @@ but `account<TAB>address`:
 python3 $S --mail-accounts        # -> personal<TAB>you@example.com
 ```
 
-**Never open `~/.config/himalaya/config.toml` yourself.** In a common setup it holds
-the account password in plaintext, and anything you read from it can end up echoed
-into the conversation. The helper reads it once, prunes every key that looks like a
-credential, and emits only addresses. Use `--mail-accounts` and nothing else.
+**Never open `~/.config/himalaya/config.toml` yourself** — it can hold the account
+password in plaintext. Use `--mail-accounts` and nothing else.
 
 That gives you `From:`. `To:` is still a question for the user — the address mail is
 sent *from* is rarely where they read it.
@@ -203,9 +196,8 @@ memory, and never reuse one you saw in an example or in a previous session.**
 Target ids look guessable and are not; they differ between installs. `hermes
 send` prints `sent` and exits 0 for a room that does not exist, so a wrong id
 is a silent black hole: the dispatcher records a successful delivery, deletes
-the alert, and the message reaches nobody. `set_alert_channel.py` now checks
-the target against this list and refuses an unknown one, which is the only
-place the mistake is catchable.
+the alert, and the message reaches nobody. `set_alert_channel.py` checks the
+target against this list and refuses an unknown one.
 
 **Step 2 — state the default, then report what else is available.** Not a wall
 of output, and no shell commands. Lead with where they already are:
@@ -215,10 +207,7 @@ of output, and no shell commands. Lead with where they already are:
 > like any of those too — and is anyone else using this?
 
 Name the platforms the way `hermes send --list` did — Telegram, Signal,
-Discord, Slack, Matrix, SMS, whatever this machine actually has. Nothing in
-this skill prefers a particular one; the letter's command is just a shell
-command, so any target `hermes send` accepts works identically. The default
-comes from where the user is talking to you, not from the order of the list.
+Discord, Slack, Matrix, SMS, whatever this machine actually has.
 
 If the current platform has exactly one target and only one person is
 involved, say what you're going to do and proceed rather than interrogating
@@ -237,14 +226,9 @@ python3 $S --list          # show what is configured
 python3 $S --remove r      # delete a letter
 ```
 
-The script exists because hand-editing this section goes wrong in three
-specific ways, and it handles all of them: the section normally *exists but
-holds only comments* (so "append after `[alerts]`" and "create the section"
-both misfire); an apostrophe silently destroys the section two tklr runs later;
-and confirming a letter survived requires running tklr twice. It also rejects
-uppercase/multi-character letters, the reserved `n`, and no-op commands like
-`true`, then verifies the letter round-trips and that `@a 1h: <letter>`
-actually validates. On success it prints exactly that:
+It rejects uppercase/multi-character letters, the reserved `n`, and no-op
+commands like `true`, then verifies the letter round-trips and that
+`@a 1h: <letter>` validates. On success it prints:
 
 ```
 added 'r' and verified it:
@@ -265,10 +249,8 @@ a thing to type.
 makes are `{name}`, `{when}`, `{start}`, `{time}`, `{location}` and
 `{description}` — anything else you invent, like `{message}` or `{subject}`,
 is sent to the user *literally* and stays broken for the life of the letter.
-The wording above also exists as written for a reason: without the word
-`Reminder` and a verb before the time, an alert reads as you *announcing* an
-upcoming reminder rather than being one. `set_alert_channel.py` rejects unknown
-placeholders, but it cannot restore meaning you removed.
+Keep the word `Reminder` and a verb before the time, or the alert reads as you
+*announcing* an upcoming reminder rather than being one.
 
 **Step 4 —** the script has already verified the letter parses, so go straight
 to *Proving it works* for the end-to-end check.
@@ -279,9 +261,7 @@ alert actually arrived, which is the one thing you cannot check.
 ## First-run setup
 
 **Do not run `install.sh` as your first step.** `python3 $R setup --platform
-<platform>` runs it for you and then does everything it leaves undone. Running
-the installer alone produces a machine with tklr present, no alert channel, and
-no dispatcher scheduled — which reports healthy and delivers nothing. The rest
+<platform>` runs it for you and then does everything it leaves undone. The rest
 of this section is background on what the installer does and how to read its
 failures, not a step to perform.
 
@@ -296,9 +276,7 @@ letters are defined yet.
 
 It uses **uv**, preferring Hermes' own copy at `$HERMES_HOME/bin/uv` (which is
 *not* on `PATH`) over any `uv` that is. uv provisions a suitable CPython itself
-when the machine has none, which is why no interpreter hunting is needed — the
-`'>=3.12'` range lets it reuse an existing Python and download one only if
-nothing qualifies.
+when the machine has none, so do not go hunting for an interpreter.
 
 **If it reports a Python problem, read carefully.** tklr requires Python
 3.12+, and inside the Hermes agent `python3` is the agent's *own venv*
@@ -318,18 +296,11 @@ unavailable, and do not try to install it manually. `install.sh` searches for a
 run it; if genuinely none exists it lists every interpreter it found and tells
 you to install one or pass `--python /path/to/python3.12`.
 
-**Why the copy:** the Hermes cron scheduler will only execute scripts that
-resolve *inside* `~/.hermes/scripts/`. It rejects absolute paths, `../`
-traversal, and symlinks alike (`path.resolve()` then `relative_to()`, with the
-comment "scripts MUST reside within HERMES_HOME/scripts/"), so pointing a job
-at the skill directory is blocked and a symlink escapes the check too. The
-skill directory stays the source of truth; `install.sh` copies the file in.
 Re-run `install.sh` after editing the dispatcher, or the cron job keeps
 running the old copy.
 
-It deliberately does **not** invent `[alerts]` letters — a placeholder no-op
-would silently swallow every reminder — and does not create the cron job.
-Finish setup in this order:
+It does **not** create `[alerts]` letters or the cron job. Finish setup in this
+order:
 
 1. Ask who is using this and which channels each person wants
    (`hermes send --list`).
@@ -343,13 +314,9 @@ hermes cron create '* * * * *' --script tklr_alert_poller.py \
   --no-agent --name tklr-alert-poller --deliver local
 ```
 
-* **`--script` takes the bare filename**, resolved *inside*
-  `~/.hermes/scripts/`. Do **not** pass a path.
-  `--script <the skill directory>/scripts/tklr_alert_poller.py`
-  is **rejected** — the scheduler resolves the path and refuses anything
-  outside `~/.hermes/scripts/` ("Blocked: script path resolves outside the
-  scripts directory"), and that includes absolute paths, `../`, and symlinks.
-  `install.sh` has already put the file where it needs to be.
+* **`--script` takes the bare filename**, resolved inside `~/.hermes/scripts/`,
+  where `install.sh` has already put it. Do **not** pass a path: absolute paths,
+  `../` and symlinks are all rejected.
 * **The schedule is a positional argument** and comes first, before the flags.
 * `--no-agent` takes no value. `--deliver local` keeps the output in the log
   instead of messaging anyone, which is what you want since the dispatcher
@@ -366,10 +333,9 @@ hermes cron list | grep -A6 tklr-alert-poller
 
 ## Proving it works
 
-**A silent dispatcher does not mean an alert was delivered.** It prints
-nothing when it has nothing to do, so "no output" is equally consistent with
-"there were no alerts at all" — which is exactly how a broken setup looks.
-Never conclude "the test passed" from absence of output.
+**A silent dispatcher does not mean an alert was delivered.** It prints nothing
+when it has nothing to do. Never conclude "the test passed" from absence of
+output.
 
 Check positive evidence at each step. Every one of these must hold:
 
@@ -416,11 +382,6 @@ almost always an undefined `@a` letter or a draft, not a dispatcher fault.
 
 ## Offer the channels they are not using yet
 
-One configured channel is a working setup, not a finished one, and the user cannot
-ask for a channel they don't know you can reach. Alerts are the whole point of the
-skill; a reminder that only lands somewhere they aren't looking is the failure this
-exists to prevent.
-
 **You do not have to discover this, or word it.** `setup` and `status` both end
 with `Other channels this machine can reach`, listing every route with no letter
 yet — the himalaya account and its address, a reachable group chat, a desktop
@@ -450,37 +411,25 @@ Rules for this:
   alert has actually been delivered through it. `email` and `channels --set` both
   create that test themselves, so the block they print says a test has been sent —
   which is true only if you let them run it. `--no-test` makes it say otherwise.
-* **The reply is the block, and only the block.** The turn after a channel is
-  added is where this skill's oldest failure resurfaces: nothing is left to say,
-  so a tklr command gets invented to fill the space. Everything the user needs is
-  in the block; everything else on screen is yours.
+* **The reply is the block, and only the block.** Everything the user needs is
+  in it; everything else on screen is yours.
 
 ## Offer the short name too
 
-The same blocks carry one more offer, when the name is free: a shortcut so the
-skill can be invoked without typing its full name. It is listed separately from
-the channels because nothing is delivered to it — it changes how the user reaches
-you, not where alerts land.
+The same blocks carry one more offer when the name is free: a shortcut for
+invoking the skill without typing its full name.
 
 ```bash
 python3 $R shortcut            # the default short name
 python3 $R shortcut --name rem # if they want a different one
 ```
 
-Rules for this:
-
-* **Only when they ask for it.** The offer is printed for you; running it is not
-  implied by the offer being there. It writes to the host's own configuration,
-  which is the user's file and not this skill's.
-* **It refuses a name that already resolves to something else**, and names what
-  holds it. That is not a problem to work around: pick another name with `--name`,
-  or drop it. A shortcut that shadows a command they already use is a worse
-  outcome than typing a few more characters.
-* **It does not work until the user restarts.** The host reads that configuration
-  once at startup. The block printed by `shortcut` says so; do not describe the
-  shortcut as working, and do not offer to restart anything yourself.
-* **Nothing about reminders depends on it.** If it fails, say so plainly and carry
-  on: the full name keeps working exactly as before.
+* **Only when they ask for it.** The offer being printed does not mean run it.
+* **If it refuses**, the name belongs to something else: offer another with
+  `--name`, or drop it.
+* **Do not describe the shortcut as working, and do not restart anything.** It
+  takes effect after a restart the user runs.
+* **If it fails, say so and carry on.** Reminders are unaffected.
 
 ## Closing out setup
 
@@ -491,13 +440,8 @@ python3 $R welcome
 Send that output verbatim. It is built from the letters actually configured, so
 it promises only what exists.
 
-Do not write your own. The user needs to know **what they can now say** — not
-how it was built, not a command cheat sheet, not the steps you performed, not
-the tool names. They asked for an assistant; a summary full of `tklr`
-invocations tells them the assistant does not exist, and every hand-written
-attempt in this skill's history has produced exactly that. *How to talk about
-this skill* in `SKILL.md` has the reasoning and the test to apply if you are
-tempted anyway.
+Do not write your own. If you are tempted, apply the test in *How to talk about
+this skill* in `SKILL.md`.
 
 ## Optional: a daily briefing
 
@@ -523,31 +467,16 @@ every-minute alert dispatcher is unrelated and must stay.
 
 ## How the every-minute job actually gets created
 
-Two independent routes create it, and **neither is the blueprint block
-itself**:
+Two routes create it, and **neither is the blueprint block itself**:
 
 1. **Setup, step 3 above.** The agent runs `hermes cron create ... --script
    ... --no-agent` while setting the skill up. This is the normal path.
 2. **The blueprint, as a safety net.** Its prompt tells the agent to create
-   that same job if it has gone missing. So the blueprint *does* cause the
-   cron job to be created — by instructing an agent run to do it, not by
-   being converted into it.
+   that same job if it has gone missing.
 
-The blueprint block cannot become the minute job directly, for two reasons
-worth knowing before anyone tries:
-
-* **`script` is dropped.** `blueprint_to_job_spec()` passes only prompt,
-  schedule, name, deliver, skills, model, provider, toolsets, and `no_agent`.
-  A `script:` key in the blueprint survives into the spec's `raw` dict and is
-  then ignored, so `no_agent: true` would produce a job with no script —
-  which `create_job()` rejects outright ("no_agent=True requires a script").
-* **A blueprint without `no_agent` runs the LLM.** At `* * * * *` that means
-  an agent invocation every minute, which is exactly what we're avoiding.
-
-Note also that **installing a blueprint skill never schedules anything by
-itself.** It registers a *suggestion* that you accept or dismiss
-(`register_blueprint_suggestion`), so the daily health check only starts
-running once you approve it.
+Never try to make the blueprint block into the minute job. Installing a
+blueprint skill also schedules nothing by itself: it registers a suggestion the
+user accepts or dismisses.
 
 **One minute is the floor.** The Hermes scheduler ticks every 60 seconds and
 its interval parser accepts only minutes, hours, and days — no seconds. An

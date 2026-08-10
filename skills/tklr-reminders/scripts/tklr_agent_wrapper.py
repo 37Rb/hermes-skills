@@ -485,6 +485,9 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
     if args.location:
         parts.append(f"@l {args.location.strip()}")
 
+    if getattr(args, "link", None):
+        parts.append(f"@g {args.link.strip()}")
+
     if args.priority:
         if args.priority not in range(1, 6):
             die("--priority must be 1 (highest) to 5 (lowest)")
@@ -947,7 +950,7 @@ def split_alert_token(value: str | None) -> tuple[list[str], list[str]]:
 CLEARABLE = {
     "duration": "e", "repeat": "r", "location": "l", "priority": "p",
     "notice": "n", "offset": "o", "travel": "w", "note": "d",
-    "people": "b", "alerts": "a", "alert": "a", "use": "u",
+    "people": "b", "alerts": "a", "alert": "a", "use": "u", "link": "g",
 }
 
 
@@ -1007,6 +1010,9 @@ def cmd_edit(args, home: Path, now: datetime) -> int:
 
     if args.location:
         sets.append(f"@l {args.location.strip()}")
+
+    if getattr(args, "link", None):
+        sets.append(f"@g {args.link.strip()}")
 
     if args.priority:
         if args.priority not in range(1, 6):
@@ -1258,7 +1264,8 @@ def refuse_plus_on_recurring(entry: str) -> None:
     all. `tklr check` calls it valid and `tklr add` reports success, so without
     this the reminder is created, confirmed to the user, and is already invisible
     -- the one shape where every report is true and nothing is on the schedule.
-    Reached through `--raw`, which is the only way to hand-write tokens.
+    `add` can no longer compose `@+`, so this guards the token edits in
+    `tklr_mutate.py` and anything a future flag might assemble.
     """
     if has_token(entry, "r") and has_token(entry, "+"):
         die("that reminder would never appear on the schedule",
@@ -2344,14 +2351,9 @@ def cmd_status(args, home: Path, now: datetime) -> int:
 
 
 def cmd_add(args, home: Path, now: datetime) -> int:
-    if args.raw:
-        entry, resolved = args.raw.strip(), None
-        if entry[:1] not in set(ITEMTYPE.values()) | {"-", "?"}:
-            die("a raw entry must start with an itemtype character")
-    else:
-        if not args.type:
-            die("--type is required", code=2)
-        entry, resolved, _ = build_entry(args, home, now)
+    if not args.type:
+        die("--type is required", code=2)
+    entry, resolved, _ = build_entry(args, home, now)
 
     refuse_plus_on_recurring(entry)
 
@@ -2552,7 +2554,13 @@ def main() -> int:
             "  --alert 5m, which fires in 3.\n"
             "\n"
             "recurring:\n"
-            "  --repeat \"daily\", \"every weekday\", \"weekly on monday\"\n"
+            "  --repeat takes tklr recurrence, not plain English: a frequency\n"
+            "  character (y m w d h n) then optional & options.\n"
+            "    --repeat \"d\"                    every day\n"
+            "    --repeat \"d &w MO,TU,WE,TH,FR\"  every weekday\n"
+            "    --repeat \"w &i 2 &w TU\"         every other Tuesday\n"
+            "    --repeat \"m &d -1\"              last day of the month\n"
+            "  See the recurrence table in references/using-the-wrapper.md.\n"
             "\n"
             "projects:\n"
             "  --step \"Book flights\" --step \"Reserve hotel\" --chain\n"
@@ -2567,7 +2575,7 @@ def main() -> int:
             "      --duration 1h --for alex --alert 1d,1h --via r\n"
             "  %(prog)s --type task --subject \"Buy milk\" --for alex\n"
             "  %(prog)s --type event --subject \"Standup\" --when \"tomorrow 9am\" \\\n"
-            "      --repeat \"every weekday\" --for alex,jordan --alert 10m --via r\n"))
+            "      --repeat \"d &w MO,TU,WE,TH,FR\" --for alex,jordan --alert 10m --via r\n"))
     a.add_argument("--type", choices=sorted(ITEMTYPE),
                    help="event (has a time), task (to do), project (tasks with "
                         "steps), goal (n per period), note (reference), jot "
@@ -2587,13 +2595,13 @@ def main() -> int:
     a.add_argument("--timezone", help="e.g. America/Chicago; default is local")
     a.add_argument("--offset", help="for tasks: reschedule this long after completion, e.g. 3d")
     a.add_argument("--travel", help="travel time, e.g. 30m or 30m,15m (before,after)")
-    a.add_argument("--repeat", help="'daily', 'every weekday', 'weekly on monday'")
+    a.add_argument("--repeat", help="tklr recurrence, e.g. 'd' or 'd &w MO,TU,WE,TH,FR'")
     a.add_argument("--target", help="for goals: completions per period, e.g. 3/1w")
     a.add_argument("--step", action="append",
                    help="a project step; repeat the flag for each one")
     a.add_argument("--chain", action="store_true",
                    help="each --step waits on the one before it")
-    a.add_argument("--raw", help="last resort; see references/tklr-syntax.md")
+    a.add_argument("--link", help="a url or file path to attach, e.g. a meeting link")
     a.add_argument("--dry-run", action="store_true",
                    help="show what would be created, write nothing")
     a.set_defaults(fn=cmd_add)
@@ -2651,12 +2659,13 @@ def main() -> int:
                    "toward, e.g. exercise.walking (a dot nests it under exercise)")
     e.add_argument("--note", help="free-text detail")
     e.add_argument("--location", help="where")
+    e.add_argument("--link", help="a url or file path to attach")
     e.add_argument("--priority", type=int, help="1 (highest) to 5 (lowest)")
     e.add_argument("--notice", help="how long before it starts to show as pending")
     e.add_argument("--timezone", help="only with --when")
     e.add_argument("--offset", help="for tasks: reschedule this long after completion")
     e.add_argument("--travel", help="travel time, e.g. 30m or 30m,15m")
-    e.add_argument("--repeat", help="repetition rule")
+    e.add_argument("--repeat", help="tklr recurrence, e.g. 'd &w MO,TU,WE,TH,FR'")
     e.add_argument("--clear", help="remove fields entirely, comma-separated: "
                                    + ", ".join(sorted(set(CLEARABLE))))
     e.add_argument("--dry-run", action="store_true",

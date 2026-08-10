@@ -124,7 +124,8 @@ when each alert will fire.
 | `--alert` | offsets **before** the start: `1d,1h,15m` |
 | `--via` | channel letters: `r`, or `r,e` |
 | `--note` `--location` `--priority` `--notice` | extra detail, place, 1–5, early warning |
-| `--repeat` | tklr recurrence, e.g. `"d &w MO,TU,WE,TH,FR"` |
+| `--repeat` | tklr recurrence — see the table below |
+| `--link` | a url or file path, e.g. a meeting link |
 | `--offset` | for tasks: reschedule this long **after completion**, e.g. `3d` |
 | `--travel` | travel held either side: `30m` or `30m,15m` (before,after) |
 | `--timezone` | zone for `--when`, e.g. `US/Pacific`, or `none` to float |
@@ -132,15 +133,41 @@ when each alert will fire.
 | `--target` | goal target, e.g. `3/1w` |
 | `--step` (repeatable) `--chain` | project steps; `--chain` makes each depend on the previous |
 | `--dry-run` | show the entry and alert times, write nothing |
-| `--raw` | a complete tklr entry — skips assembly, keeps every check |
 
 It refuses what cannot work — an undefined `--via` letter (listing the ones that
 exist), `--alert` without `--via`, a `--when` it cannot parse, a goal without
 `--target`, `3/w` instead of `3/1w` — and warns without blocking when a timed
 reminder has **no alert** ("will not notify anyone") or no `--for`.
 
-Use `--raw` only for something the flags cannot express, and expect to get the
-grammar exactly right when you do; `references/tklr-syntax.md` is the authority.
+There is no escape hatch for entries the flags cannot express. If a request
+needs something not listed above, say so rather than composing tklr tokens by
+hand.
+
+### `--repeat`: the recurrence grammar
+
+`--repeat` is the one flag whose value is tklr's own syntax, passed through
+unchanged as `@r`. **Plain English does not work** — `--repeat daily` is
+rejected. It takes a frequency character, then optional `&` options:
+
+| Frequency | Meaning |
+|-----------|---------|
+| `y` `m` `w` `d` `h` `n` | year, month, week, day, hour, minute |
+
+| Option | Meaning | Example |
+|--------|---------|---------|
+| `&i` | interval | `w &i 2` = every 2 weeks |
+| `&w` | weekdays `SU`–`SA` | `d &w MO,TU,WE,TH,FR` |
+| `&m` | months 1–12 | `y &m 3,9` |
+| `&d` | month days (negative counts from the end) | `m &d -1` = last day |
+| `&H` `&M` | hours / minutes | `d &H 9,17` |
+| `&E` | days relative to Easter | `y &E 0` |
+
+```bash
+--repeat "d"                      every day
+--repeat "d &w MO,TU,WE,TH,FR"    every weekday
+--repeat "w &i 2 &w TU"           every other Tuesday
+--repeat "m &d -1"                last day of each month
+```
 
 ### What the user says → what you run
 
@@ -181,7 +208,7 @@ subjects but **no dates, times, or owners**, so never disambiguate from their
 output alone:
 
 ```
-$ tklr find dentist
+$ python3 $R find dentist
 * Dentist checkup (id 1)
 * Dentist follow-up (id 2)
 * Dentist for Jordan (id 3)
@@ -217,9 +244,7 @@ Alternatively, when the request names a day, `days --start <date> --end 1
 Deletes and moves are irreversible — tklr has no undo and no trash. So:
 
 **Always confirm** a delete (any scope), a reschedule, and the delete-leg of an
-edit. **Don't confirm** adds (a wrong add can be deleted) or `finish` on an
-unambiguous task — "I've done that" is the most frequent thing anyone says, and
-prompting every time teaches people to stop reading the prompts.
+edit. **Don't confirm** adds or `finish` on an unambiguous task.
 
 **Resolve it with `--dry-run` first**, so what the user confirms is what
 actually changes — not your description of it:
@@ -357,15 +382,11 @@ is what you call:
 | change any other detail | `$R edit <id> --<field> <value>` |
 
 **Moving one occurrence splits it off into its own reminder.** That is
-deliberate. On tklr 1.0.43 a recurring record that stores a moved occurrence
-generates **no occurrences at all** — the entire series disappears from the
-schedule while `details` still prints a correct-looking rruleset and every
-command reports success. Measured: twelve occurrences before the move, zero
-after. So `move` excludes the old date from the series, which works, and creates
-the moved one as a separate dated reminder carrying the original's duration,
-alerts, people and details. Two records is the cost; the alternative is a
-reminder that silently stops existing. Tell the user it is now separate only if
-they would notice — they asked to move one thing, and it moved.
+deliberate: on tklr 1.0.43 a recurring record that stores a moved occurrence
+generates **no occurrences at all**, so `move` excludes the old date from the
+series and creates the moved one as a separate dated reminder carrying the
+original's duration, alerts, people and details. Tell the user it is now
+separate only if they would notice — they asked to move one thing, and it moved.
 
 `status` also reports any reminder already in that state, since tklr's own
 reschedule and its UI both produce it without the skill involved.
@@ -376,28 +397,10 @@ refuses an empty `--instance` instead of silently deleting the whole series, and
 never writes the token that empties a schedule. Reaching past the wrapper is how
 a reminder ended up on the schedule at two different times.
 
-**Why a script here.** These operations exist in tklr but have **no CLI
-surface** — `add` and `finish` are the only mutations the command line offers.
-The shim calls tklr's own `Controller` methods (the same ones its UI uses) under
-tklr's own interpreter, so cascades and derived tables stay correct. It is a
-temporary measure; when `tklr delete` and `tklr edit` appear, delete the script.
-
-It checks each function exists and accepts the arguments it is about to pass,
-then verifies the outcome — the target gone or moved, every other reminder
-untouched — and rebuilds derived tables. If tklr's internals have moved it
-refuses and tells you the current signature:
-
-```
-error: tklr no longer provides Controller.delete_record().
-  Workaround: the interactive UI can do this — run `tklr ui`, select the
-  reminder, and delete or reschedule it there.
-```
-
-If that happens, relay it: the user can do it in `tklr ui` themselves, and the
-skill needs updating. **Do not** go hunting for the renamed function and patch
-the script on the fly — a guess about an unfamiliar internal API, applied to
-something that deletes user data, is exactly the wrong risk to take. Report the
-signature the error gives you and let a human decide.
+If tklr's internals have moved, the shim refuses and prints the current
+signature. **Do not** go hunting for the renamed function and patch the script
+on the fly. Report the signature it gives you, say the skill needs updating, and
+stop.
 
 Never re-add a corrected copy and call it moved — that silently doubles the
 entry, and both copies will alert. Delete the original first.
@@ -430,4 +433,4 @@ exists, or tklr declines.
 Always re-run the dispatcher's heal command
 (`python3 ~/.hermes/scripts/tklr_alert_poller.py --heal`) after a change that
 touches alerts. Note `--heal` is a flag on *our* dispatcher script, not a tklr
-option — tklr has no way to force a rebuild, which is why the flag exists.
+option.

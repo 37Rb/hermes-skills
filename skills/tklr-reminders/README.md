@@ -6,7 +6,7 @@ You talk to it in plain language. It works out the commands, and it delivers rem
 
 If you just want it running, [skip to Install](#install).
 
-**It currently requires Hermes Agent.** A port to OpenClaw is planned; see [Portability](references/how-it-works.md#portability) for the details.
+**It currently requires Hermes Agent.** A port to OpenClaw is planned; see [Portability](documentation/portability.md) for the details.
 
 ## Six kinds of reminder
 
@@ -172,7 +172,7 @@ Capture first, fill in the detail afterwards: that two-step is the whole point o
 
 Behind the scenes is [tklr](https://github.com/dagraham/tklr-dgraham) ([documentation](https://dagraham.github.io/tklr-dgraham/)). You don't need to learn its syntax. Just talk to your agent in natural language and let it use the tool.
 
-You can learn it if you want to, though. The skill sits alongside ordinary tklr use rather than replacing it. It uses tklr's normal workspace at `~/.config/tklr`, so you and the agent share one database: anything you add with `tklr` or its UI shows up for the agent, and anything the agent adds shows up for you. [`references/tklr-syntax.md`](references/tklr-syntax.md) documents the grammar.
+You can learn it if you want to, though. The skill sits alongside ordinary tklr use rather than replacing it. It uses tklr's normal workspace at `~/.config/tklr`, so you and the agent share one database: anything you add with `tklr` or its UI shows up for the agent, and anything the agent adds shows up for you. [tklr's own documentation](https://dagraham.github.io/tklr-dgraham/) covers its grammar.
 
 ## Install
 
@@ -271,7 +271,7 @@ README.md                             this file
 references/setup.md                   the setup procedure, start to finish
 references/using-the-wrapper.md       every command the agent runs day to day
 references/how-it-works.md            delivery, healing, SQLite, troubleshooting
-references/tklr-syntax.md             underlying tklr grammar, only needed for --raw
+documentation/portability.md          for developers porting the skill
 scripts/tklr_agent_wrapper.py         the one interface: add edit list show find
                                         free done delete move uses channels
                                         status setup email shortcut welcome

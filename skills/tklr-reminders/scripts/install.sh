@@ -172,6 +172,14 @@ else
     # because "the newest release is older than the floor" is worth failing on
     # loudly rather than discovering later inside a parse error.
     check_tklr_version "$(tklr_version)" || exit 1
+
+    # Recorded because only this branch installed tklr. reset.sh used to infer
+    # ownership from "uv reports it", which is not the same question: a user who
+    # ran `uv tool install tklr-dgraham` before adding this skill has a uv-owned
+    # tklr the skill did not install, and the reset would have removed their
+    # copy. Written only here, never on the reuse branch, and cleared by reset.
+    mkdir -p "$HERMES_SCRIPTS"
+    printf 'tklr-dgraham\n' > "$HERMES_SCRIPTS/tklr-installed-by-skill" 2>/dev/null || true
 fi
 
 # ------------------------------------------------------------ 2. workspace

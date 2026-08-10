@@ -1647,7 +1647,7 @@ def create_test_alert(letter: str, home: Path, _now: datetime) -> int:
           f"(in {human(fires - now)}), delivered within a minute of that.")
     proc = subprocess.run(
         [sys.executable, str(Path(__file__).resolve()), "--home", str(home),
-         "add", "--type", "event", "--subject", "tklr delivery test",
+         "add", "--type", "event", "--subject", TEST_SUBJECT,
          "--when", f"{start:%Y-%m-%d %H:%M}", "--duration", "5m",
          "--alert", f"{offset_min}m", "--via", letter],
         capture_output=True, text=True)
@@ -2053,9 +2053,32 @@ week's standup but keep the rest" all work too. To change any other detail I'll
 replace the entry and tell you that's what I did.
 """
 
+TEST_SUBJECT = "tklr delivery test"
+
 TEST_LINE = ("\nI've added a test reminder that should reach you shortly — tell "
              "me whether it arrives, since that's the one part I can't check "
              "myself.\n")
+
+
+def recent_delivery_test(home: Path, now: datetime, minutes: int = 30) -> bool:
+    """Was a delivery test created recently enough to still be arriving?
+
+    `Records.created` is a UTC stamp (`20260809T2217Z`), so it is compared
+    against UTC rather than local time -- comparing it to a local clock is
+    right for one timezone and silently wrong everywhere else.
+    """
+    import sqlite3
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(minutes=minutes)).strftime("%Y%m%dT%H%M")
+    try:
+        conn = sqlite3.connect(home / "tklr.db", timeout=15)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM Records WHERE subject = ? AND created >= ?",
+            (TEST_SUBJECT, cutoff + "Z")).fetchone()
+        conn.close()
+    except sqlite3.Error:
+        return False
+    return bool(row and row[0])
 
 
 def cmd_welcome(args, home: Path, now: datetime) -> int:
@@ -2078,7 +2101,13 @@ def cmd_welcome(args, home: Path, now: datetime) -> int:
     else:
         channels_text = channels[0]
     text = WELCOME.format(who=args.who or "Jordan", channels=channels_text)
-    if not args.no_test:
+    # The flag alone is not enough to make the claim. `welcome` sends nothing;
+    # the test it refers to is the one `setup` created moments earlier, so the
+    # sentence is only true when that record actually exists. Its default is to
+    # include the line, and the documented answer to "how do I use this" is this
+    # command -- so a user asking that months later was told a test reminder was
+    # on its way, waited for it, and had every reason to report the skill broken.
+    if not args.no_test and recent_delivery_test(home, now):
         text += TEST_LINE
     # Re-wrap per paragraph: the channel list is variable-length, so the
     # template's own line breaks land wherever. Chat clients re-wrap anyway;

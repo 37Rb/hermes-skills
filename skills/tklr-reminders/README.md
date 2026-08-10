@@ -248,9 +248,9 @@ references/setup.md                   the setup procedure, start to finish
 references/using-the-wrapper.md       every command the agent runs day to day
 references/how-it-works.md            delivery, healing, SQLite, troubleshooting
 references/tklr-syntax.md             underlying tklr grammar, only needed for --raw
-scripts/tklr_agent_wrapper.py         the one interface: add list show find free
-                                        done delete move uses channels status
-                                        setup email welcome
+scripts/tklr_agent_wrapper.py         the one interface: add edit list show find
+                                        free done delete move uses channels
+                                        status setup email welcome
 scripts/tklr_alert_poller.py          the every-minute dispatcher
 scripts/set_alert_channel.py          safely edit [alerts]; validates targets
 scripts/tklr_mutate.py                low-level record edits

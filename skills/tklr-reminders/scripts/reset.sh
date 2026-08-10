@@ -19,7 +19,7 @@
 #   5. the skill's usage registration     (entry in ~/.hermes/skills/.usage.json)
 #   6. the cached skill prompt index      (~/.hermes/.skills_prompt_snapshot.json)
 #   7. the ENTIRE tklr workspace          (~/.config/tklr — config AND database)
-#   8. tklr itself, only if uv owns it   (uv tool uninstall tklr-dgraham)
+#   8. tklr itself, only if uv owns it AND this skill installed it
 #
 # HOST-SPECIFIC, all of it: every path above is Hermes layout and the cron
 # calls are Hermes' scheduler. This is a test-harness script rather than part
@@ -128,14 +128,29 @@ for c in "${UV:-}" "$HERMES_HOME/bin/uv" uv; do
     c="$(command -v "$c" 2>/dev/null || { [[ -x "$c" ]] && echo "$c"; })"
     [[ -n "$c" ]] && { UV_BIN="$c"; break; }
 done
+# Two separate questions, and only both together justify removing tklr:
+# can uv remove it, and did THIS SKILL put it there. uv ownership alone answers
+# the first and was being read as an answer to the second -- so a user who ran
+# `uv tool install tklr-dgraham` themselves before adding the skill would have
+# had their own tklr uninstalled by a reset. install.sh records the marker only
+# on the branch that actually performs the install.
+INSTALL_MARKER="$HERMES_HOME/scripts/tklr-installed-by-skill"
 UV_OWNS=""
 if [[ -n "$UV_BIN" ]] && "$UV_BIN" tool list 2>/dev/null | grep -q "tklr-dgraham"; then
     UV_OWNS=1
 fi
+SKILL_INSTALLED=""
+[[ -f "$INSTALL_MARKER" ]] && SKILL_INSTALLED=1
 
 if command -v tklr >/dev/null 2>&1; then
-    if [[ -n "$UV_OWNS" ]]; then
+    if [[ -n "$UV_OWNS" && -n "$SKILL_INSTALLED" ]]; then
         echo "  - tklr package: $(tklr --version 2>&1 | head -1) (uv tool uninstall)"; FOUND=1
+    elif [[ -n "$UV_OWNS" ]]; then
+        echo
+        echo "NOT touching tklr at $(command -v tklr)"
+        echo "  uv owns it, but there is no record of this skill installing it,"
+        echo "  so it was already on this machine. Remove it yourself if you"
+        echo "  want it gone: $UV_BIN tool uninstall tklr-dgraham"
     else
         echo
         echo "NOT touching tklr at $(command -v tklr)"
@@ -244,7 +259,8 @@ fi
 # the only thing it is for.
 step "recorded paths beside the dispatcher"
 for recorded in "$HERMES_HOME/scripts/tklr-workspace-path" \
-                "$HERMES_HOME/scripts/tklr-wrapper-path"; do
+                "$HERMES_HOME/scripts/tklr-wrapper-path" \
+                "$INSTALL_MARKER"; do
     if [[ -f "$recorded" ]]; then
         act "rm $recorded"
         [[ $DRY_RUN -eq 0 ]] && rm -f "$recorded"
@@ -314,10 +330,11 @@ fi
 # --------------------------------------------------------- 8. tklr package
 step "tklr package"
 if command -v tklr >/dev/null 2>&1; then
-    # We only remove what this skill installed, and it installs solely with uv.
-    # A tklr from anywhere else (pipx, apt, a manual venv) is somebody else's —
-    # report it and leave it alone.
-    if [[ -n "$UV_OWNS" ]]; then
+    # We only remove what this skill installed. That needs BOTH uv ownership
+    # (so uv can remove it) and the marker install.sh writes on the branch that
+    # actually installs (so we know it was us). uv ownership alone answers a
+    # different question and would take a user's own tklr with it.
+    if [[ -n "$UV_OWNS" && -n "$SKILL_INSTALLED" ]]; then
         act "$UV_BIN tool uninstall tklr-dgraham"
         if [[ $DRY_RUN -eq 0 ]]; then
             "$UV_BIN" tool uninstall tklr-dgraham >/dev/null 2>&1
@@ -329,6 +346,15 @@ if command -v tklr >/dev/null 2>&1; then
                 echo "    uninstalled (confirmed gone from PATH)"
             fi
         fi
+    elif [[ -n "$UV_OWNS" ]]; then
+        # uv could remove it, but nothing says this skill put it there. Naming
+        # the exact command matters more than usual here: the reason we stop is
+        # that it may be the user's own tklr, so the decision is theirs.
+        echo "  LEAVING ALONE: tklr at $(command -v tklr)"
+        echo "    uv owns it, but there is no record of this skill installing"
+        echo "    it, so it was already on this machine."
+        echo "    Remove it yourself if you want to:"
+        echo "      $UV_BIN tool uninstall tklr-dgraham"
     else
         echo "  LEAVING ALONE: tklr at $(command -v tklr)"
         echo "    uv does not report owning it, so this skill did not install it."

@@ -567,12 +567,23 @@ def alert_fire_time(off: str, start: datetime) -> datetime:
 
 
 def parse_resolved(resolved: str | None) -> datetime | None:
+    """'2026-08-14 09:00' or '2026-08-14' -> datetime. None if neither.
+
+    A date with no time is a real start, not an unparseable one: `add --when
+    friday` on a task produces exactly that. Returning None for it made every
+    caller treat a dateless reminder as "cannot tell", and the alert check reads
+    "cannot tell" as "must already have fired", so `add` reported every date-only
+    reminder with an alert as NO ALERT SCHEDULED and exited 1 -- with the record
+    saved and perfectly healthy.
+    """
     if not resolved:
         return None
-    try:
-        return datetime.strptime(resolved, "%Y-%m-%d %H:%M")
-    except ValueError:
-        return None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(resolved.strip(), fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def stamp(when: datetime, now: datetime) -> str:
@@ -783,7 +794,11 @@ def as_instant(stamp_text: str) -> str:
     is_utc = text.endswith("Z")
     core = text[:-1] if is_utc else text
     parsed = None
-    for fmt in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M"):
+    # The bare date is how tklr renders an all-day exclusion (`@- 20260817`),
+    # while the same occurrence is stored as `20260817T0000`. Without this the
+    # two never compare equal and re-skipping an all-day date is reported as
+    # "not an occurrence" rather than as already skipped.
+    for fmt in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M", "%Y%m%d"):
         try:
             parsed = datetime.strptime(core, fmt)
             break
@@ -2295,16 +2310,30 @@ def verify_scheduled(home: Path, record_id: int, entry: str, resolved: str | Non
     if not wanted_alert:
         return
 
-    # An alert further out than a day may legitimately have no row yet -- tklr
-    # only materialises alerts inside its generation horizon. Only insist on a
-    # row when the trigger is close enough that one must already exist.
+    # An alert due after today may legitimately have no row yet, so only insist
+    # on one when the trigger falls inside the window tklr actually fills.
+    #
+    # That window is now .. LOCAL END OF DAY, not a rolling 24 hours:
+    # `populate_alerts` (model.py:3268) computes
+    # `now.replace(hour=23, minute=59, second=59)` and `populate_alerts_for_record`
+    # says "alerts that trigger today". Testing against 24 hours instead --
+    # which this did -- makes every evening reminder for tomorrow morning fail:
+    # the alert is under a day away, so a row is demanded, and tklr will not
+    # write one until midnight. `add` then reported a perfectly healthy reminder
+    # as "NO ALERT was scheduled -- nobody will be notified" and exited 1.
     soonest = None
     m = re.search(r"@a ([^:]+):", entry)
     if m and start:
         fires = [alert_fire_time(o.strip(), start) for o in m.group(1).split(",")]
         soonest = min(fires) if fires else None
+    end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=0)
 
-    if not alert_rows and (soonest is None or soonest - now < timedelta(days=1)):
+    # `soonest is None` means the fire time could not be worked out, which is
+    # not evidence the alert is missing. Insisting on a row in that case turns
+    # every unparsed shape into a false "nobody will be notified" on a record
+    # that is fine, and the caller's repair for that is to delete and re-add a
+    # healthy reminder.
+    if not alert_rows and soonest is not None and soonest <= end_of_day:
         die(f"id {record_id} was saved but NO ALERT was scheduled — nobody will "
             "be notified",
             heal_failed or "The alert row tklr should have generated is missing.",

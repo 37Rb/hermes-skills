@@ -85,7 +85,13 @@ guard_tklr_home() {
     fi
 }
 guard_tklr_home
-HERMES_HOME="$HOME/.hermes"
+# Assigned with a default rather than unconditionally: this overwrote a set
+# $HERMES_HOME, so on any machine that moves the host directory the reset
+# cleaned a path that did not exist and left the real dispatcher, log and
+# recorded paths in place -- while reporting that everything had been removed.
+# A reset that lies is worse than no reset, since its only purpose is to make a
+# from-scratch test mean something.
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 DISPATCHER="$HERMES_HOME/scripts/tklr_alert_poller.py"
 LOG_GLOB="$HERMES_HOME/logs/tklr-alerts.log"
 USAGE_JSON="$HERMES_HOME/skills/.usage.json"

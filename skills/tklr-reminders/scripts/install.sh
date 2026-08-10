@@ -48,8 +48,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HERMES_SCRIPTS="$HOME/.hermes/scripts"
-LOG_DIR="$HOME/.hermes/logs"
+# $HERMES_HOME, not $HOME/.hermes: host.py and the dispatcher both resolve the
+# host directory that way, and this script writes the files THEY read. Hardcoding
+# the default here put the dispatcher and the recorded paths somewhere the
+# scheduler does not look, on any machine that sets it -- with every step
+# reporting success. The `uv` lookup below already honoured it, so the script
+# disagreed with itself as well as with the Python.
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+HERMES_SCRIPTS="$HERMES_HOME/scripts"
+LOG_DIR="$HERMES_HOME/logs"
 export PATH="$HOME/.local/bin:$PATH"
 
 step() { printf '\n=== %s\n' "$1"; }
@@ -168,6 +175,22 @@ else
 fi
 
 # ------------------------------------------------------------ 2. workspace
+# The wrapper passes the workspace it already resolved, so this always matches
+# for a real setup. It differs only when a person passed --home by hand, and
+# that workspace is one `setup` will refuse to use, `tklr` will not read and the
+# dispatcher will not poll -- everything here would still report success. Said
+# out loud rather than left to the header, because a header is not read at the
+# moment the flag is typed.
+DEFAULT_TKLR_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/tklr"
+if [[ "$TKLR_HOME" != "$DEFAULT_TKLR_HOME" ]]; then
+    warn "--home $TKLR_HOME is not the workspace tklr resolves ($DEFAULT_TKLR_HOME)."
+    # No backticks in this string: bash runs them as a command substitution
+    # inside double quotes, and the first draft of this warning executed tklr
+    # and pasted its usage text into the middle of the sentence.
+    warn "  Nothing will poll it, and running tklr by hand will not see it."
+    warn "  Set TKLR_HOME or XDG_CONFIG_HOME for everything instead."
+fi
+
 step "workspace at $TKLR_HOME"
 mkdir -p "$TKLR_HOME"
 if [[ ! -f "$TKLR_HOME/tklr.db" ]]; then
@@ -246,8 +269,7 @@ cat <<EOF
   does everything that is left — alert channel, dispatcher, cron job, and a
   test alert that proves delivery works:
 
-    python3 $SKILL_DIR/scripts/tklr_agent_wrapper.py --home $TKLR_HOME \\
-      setup --platform <the platform this conversation is on>
+    python3 $SKILL_DIR/scripts/tklr_agent_wrapper.py setup --platform <the platform this conversation is on>
 
   Then wait for the test alert to arrive and ask the user whether it did.
   Report what it can now do with:

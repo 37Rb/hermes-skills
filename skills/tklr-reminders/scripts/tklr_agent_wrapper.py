@@ -2080,8 +2080,10 @@ before" — and I'll pick sensible ones if you don't say.
 
 **Changing and finishing things.** "I've done that" marks a task complete.
 "Cancel Friday's meeting", "move the dentist to Thursday afternoon", "skip next
-week's standup but keep the rest" all work too. To change any other detail I'll
-replace the entry and tell you that's what I did.
+week's standup but keep the rest" all work too. For anything else, just say
+what's different: "make that 4pm instead", "send that one to email as well",
+"call it 'Dentist checkup'". Only the part you name changes, and everything
+already recorded against the reminder stays as it is.
 """
 
 TEST_SUBJECT = "tklr delivery test"

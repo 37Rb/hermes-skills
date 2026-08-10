@@ -6,6 +6,8 @@ You talk to it in plain language. It works out the commands, and it delivers rem
 
 **It currently requires Hermes Agent.** A port to OpenClaw is planned; see [Portability](references/how-it-works.md#portability) for the details.
 
+If you just want it running, [skip to Install](#install).
+
 Six kinds of reminder cover everything you'd ask for. You don't need to know them when using: you say what you want and the agent picks. But they are what the skill is made of, so here is each one as a conversation.
 
 **Event**: something that happens at a particular time. It goes on the calendar, it can hold travel time either side, and it is the only type that really needs a clock.

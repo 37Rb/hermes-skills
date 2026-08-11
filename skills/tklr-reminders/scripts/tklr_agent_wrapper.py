@@ -178,6 +178,59 @@ def parse_time(text: str) -> tuple[int, int] | None:
     return hour, minute
 
 
+# Words that can only describe a repeat, never one date. A PLURAL weekday is in
+# here and a singular one is not: "sundays" is a pattern, "sunday" is the next
+# one of those, and --when resolves the second perfectly well. "weekend" is out
+# for the same reason -- "this weekend" is a date somebody might type, and it
+# should get the ordinary "could not understand" rather than a lecture about a
+# flag it has nothing to do with.
+REPEAT_WORDS = re.compile(
+    r"\b(every|each|daily|weekly|monthly|yearly|annually|fortnightly|biweekly|"
+    r"weekdays|weekends|"
+    r"mondays|tuesdays|wednesdays|thursdays|fridays|saturdays|sundays)\b")
+
+
+def refuse_repeat_in_when(text: str, low: str) -> None:
+    """Die if `--when` was handed a recurrence, naming the flag that takes one.
+
+    Measured 2026-08-11: asked for a weekly trash reminder, the agent wrote
+    `--when "every Sunday 8pm"`, which this function's caller could only call
+    unintelligible, and it went on to tell the user "the tklr system doesn't
+    support recurring weekly events" -- one day after `--repeat` learned exactly
+    that phrasing. Both records it filed were one-offs.
+
+    That is the `--repeat` failure of 2026-08-10 wearing a different flag: an
+    error that does not name the way out reads as the feature being absent, and
+    the agent reports the absence to the user as fact. So this refusal carries
+    the corrected command, and says outright that recurrence works.
+    """
+    if not REPEAT_WORDS.search(low):
+        return
+
+    # The clock time belongs to --when and everything else to --repeat, which is
+    # exactly the split the caller failed to make.
+    clock, pattern = [], []
+    for tok in low.split():
+        if parse_time(tok) and not re.fullmatch(r"\d{1,2}", tok):
+            clock.append(tok)
+        elif tok in ("at", "on", "the", "of"):
+            # Dropped so the suggested command reads like something a person
+            # would type: "sundays at 8pm" suggests --repeat "sundays", not
+            # --repeat "sundays at".
+            continue
+        else:
+            pattern.append(tok)
+
+    day = next((w for w in pattern if w in RECURRENCE_DAYS), "")
+    first = " ".join(x for x in (day.rstrip("s") if day else "", *clock) if x)
+    die(f"--when {text!r} describes a repeat, not one date",
+        "--when takes the FIRST occurrence; the pattern goes in --repeat:",
+        f'  --when "{first or "the first one, e.g. sunday 8pm"}" '
+        f'--repeat "{" ".join(pattern)}"',
+        "Recurring reminders ARE supported. --repeat reads days and frequencies "
+        "in words: 'Tuesdays and Thursdays', 'weekdays', 'every 3 weeks'.")
+
+
 def resolve_when(text: str, now: datetime) -> tuple[str, bool]:
     """Return (tklr-safe datetime string, has_time).
 
@@ -186,6 +239,7 @@ def resolve_when(text: str, now: datetime) -> tuple[str, bool]:
     """
     raw = " ".join(text.strip().split())
     low = raw.lower()
+    refuse_repeat_in_when(raw, low)
 
     # in N units
     m = re.fullmatch(r"in\s+(\d+)\s*(minute|minutes|min|mins|hour|hours|hr|hrs|day|days|week|weeks)", low)
@@ -3136,6 +3190,9 @@ def main() -> int:
             "    --repeat \"every other Tuesday\"    fortnightly\n"
             "  tklr's own grammar still works unchanged, and covers months,\n"
             "  month days and Easter: \"m &d -1\" is the last day of the month.\n"
+            "  The pattern goes in --repeat and ONLY the first occurrence in\n"
+            "  --when: \"every Sunday 8pm\" is --when \"sunday 8pm\" --repeat\n"
+            "  \"every Sunday\". --when refuses a pattern and prints that split.\n"
             "  See the recurrence table in references/using-the-wrapper.md.\n"
             "\n"
             "projects:\n"

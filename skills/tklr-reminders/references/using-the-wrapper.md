@@ -135,6 +135,21 @@ assembles the tokens, validates before writing, reads what the write actually
 reported, confirms the record is not a draft, heals derived state, and prints
 when each alert will fire.
 
+**A jot is time you want counted.** `uses` totals jots by category and month,
+and nothing in your own memory can add up, so that is the whole reason the type
+exists. A request with no duration and no category is not a jot however it was
+phrased.
+
+**Between a `note` and your long-term memory, the question is not whether it is
+a fact.** It is whether it should reach into conversations nobody has had yet.
+Memory is injected on every turn and is capped, so it earns that standing cost
+only for what should change your answers unasked. A note costs nothing until
+someone looks for it, keeps an id, and stays findable by text indefinitely,
+which is what reference detail wants: warranty dates, model numbers, which
+breaker feeds the garage. When a request could go either way, file it here and
+say where you put it, because a record the user can find beats a fact they have
+to take on trust.
+
 | Flag | Meaning |
 |------|---------|
 | `--type` | `event`, `task`, `project`, `goal`, `note`, `jot` |

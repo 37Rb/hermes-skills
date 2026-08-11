@@ -677,31 +677,270 @@ def human(delta: timedelta) -> str:
 
 SKILL_SCRIPTS = Path(__file__).resolve().parent
 
+# tklr wraps its list output to 40 columns by default and truncates a subject
+# that will not fit -- 'Quarterly planning review with t…'. An agent reading
+# that has to reconstruct the rest from somewhere, and the whole point of
+# these read paths is that it never has to. 200 is tklr's ceiling.
+FULL_WIDTH = "200"
+
+
+def clean_lines(proc: subprocess.CompletedProcess[str]) -> list[str]:
+    """tklr output minus its internal chatter."""
+    return [line.rstrip() for line in (proc.stdout or "").splitlines()
+            if "aggregate" not in line and "DateTimes entries" not in line]
+
 
 def show_output(proc: subprocess.CompletedProcess[str]) -> None:
     """Print tklr output minus its internal chatter."""
-    for line in (proc.stdout or "").splitlines():
-        if "aggregate" in line or "DateTimes entries" in line:
+    for line in clean_lines(proc):
+        print(line)
+
+
+# --- alert times on a list -------------------------------------------------
+#
+# tklr's list output carries each occurrence's event time and nothing at all
+# about its alerts. That left an agent asked "what is on my agenda tomorrow"
+# with no alert data in front of it, so it answered the "and when am I
+# reminded" half from memory of earlier turns -- and got it wrong, quoting one
+# item's freshly-edited offset for every item on the day. The alert is printed
+# as a clock time rather than as an offset so the answer can be read off the
+# line instead of worked out from it.
+
+def workspace_rows(home: Path, query: str) -> list[tuple]:
+    """Rows from the workspace database, or [] when it cannot be read.
+
+    Read directly rather than by calling `tklr details` once per listed item:
+    a week's list would otherwise pay for a tklr startup per occurrence, and
+    tklr imports a numeric stack that makes each one cost real CPU. Failure
+    is empty rather than fatal -- a list that cannot annotate is still a list.
+    """
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{home / 'tklr.db'}?mode=ro", uri=True, timeout=15)
+        try:
+            return conn.execute(query).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+
+
+def alerts_by_record(home: Path) -> dict[int, list[str]]:
+    """{record id: alert offsets}. Stored as JSON like `["1d, 1h: r, e"]`."""
+    import json
+    found: dict[int, list[str]] = {}
+    for rid, raw in workspace_rows(home, "SELECT id, alerts FROM Records"):
+        try:
+            entries = json.loads(raw) if raw else []
+        except (TypeError, ValueError):
             continue
-        print(line.rstrip())
+        offsets: list[str] = []
+        for entry in entries:
+            before_channels = str(entry).split(":")[0]
+            offsets += [o.strip() for o in before_channels.split(",") if o.strip()]
+        if offsets:
+            found[int(rid)] = offsets
+    return found
+
+
+def occurrence_starts(home: Path) -> dict[tuple[int, date], datetime]:
+    """{(record id, day): that day's start}.
+
+    Keyed by day as well as id because a repeating reminder appears on several
+    days of one list and each occurrence has its own alert time. Dateless rows
+    are skipped: a task with no time has no alert clock time to show.
+    """
+    # Chosen by length, not by trying formats in turn: strptime accepts one or
+    # two digits per field, so '20260810T1421' matches %H%M%S as 14:02:01 --
+    # a start that is wrong by 19 minutes and raises nothing.
+    by_length = {13: "%Y%m%dT%H%M", 15: "%Y%m%dT%H%M%S"}
+    found: dict[tuple[int, date], datetime] = {}
+    for rid, raw in workspace_rows(
+            home, "SELECT record_id, start_datetime FROM DateTimes"):
+        stamped = str(raw or "")
+        fmt = by_length.get(len(stamped))
+        if not fmt:                 # 'YYYYMMDD' -- no time, so no alert clock
+            continue
+        try:
+            started = datetime.strptime(stamped, fmt)
+        except ValueError:
+            continue
+        found[(int(rid), started.date())] = started
+    return found
+
+
+def heading_date(line: str, now: datetime) -> date | None:
+    """The day a list heading names, for both headings tklr prints.
+
+    `days` prints ' Tue, Aug 11, 2026' and `agenda` prints 'Tue Aug 11' with
+    no year at all. The yearless form takes whichever year puts it nearest
+    today, so a December agenda read in January still lands on the right day.
+
+    Matched with a regex and assembled by hand rather than handed to strptime,
+    because a yearless format warns on every call under 3.13 and is slated to
+    start raising -- and this runs against every line of every list.
+    """
+    text = re.sub(r"\s*\(today\)\s*$", "", line.strip())
+    named = re.fullmatch(r"[A-Z][a-z]{2},?\s+([A-Z][a-z]{2})\s+(\d{1,2})"
+                         r"(?:,\s*(\d{4}))?", text)
+    if not named:
+        return None
+    month = MONTHS.get(named.group(1))
+    if not month:
+        return None
+    day = int(named.group(2))
+    years = [int(named.group(3))] if named.group(3) else [
+        now.year - 1, now.year, now.year + 1]
+    candidates = []
+    for year in years:
+        try:
+            candidates.append(date(year, month, day))
+        except ValueError:          # Feb 29 of a common year
+            continue
+    return min(candidates, key=lambda d: abs(d - now.date()), default=None)
+
+
+def alert_note(offsets: list[str], start: datetime) -> str:
+    """`[alert 7:30]` for one, `[alerts 7:00, 7:30]` for several.
+
+    A timed occurrence with no alert says so outright. tklr accepts one
+    happily and then notifies nobody, and a list that stayed quiet about it
+    reads exactly like a list where the alert is set.
+
+    An offset big enough to land on another day carries its date, because a
+    bare clock time sitting under a day's heading reads as that day: `1d`
+    before a 9:00 event is 9:00 the morning BEFORE, and `[alert 9:00]` on the
+    event's own line is indistinguishable from no offset at all.
+    """
+    if not offsets:
+        return "[no alert]"
+    times = []
+    for off in offsets:
+        fires = alert_fire_time(off, start)
+        times.append(f"{fires:%-H:%M}" if fires.date() == start.date()
+                     else f"{fires:%Y-%m-%d %-H:%M}")
+    return f"[{'alert' if len(times) == 1 else 'alerts'} {', '.join(times)}]"
+
+
+MONTHS = {m: i for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1)}
+
+LISTED_ID = re.compile(r"\((\d+)\)\s*$")
+
+# `agenda` tags rows with double-struck letters -- 𝕒 for "has an alert", 𝕣 for
+# "repeats". They are legible in the TUI they were designed for and nowhere
+# else: an agent reading one back to a user rendered '𝕒𝕣' as "@ar". 𝕒 is
+# dropped because the bracket that follows states the alert outright; 𝕣 is
+# kept as a word, being the one thing it says that nothing else does.
+ROW_MARKERS = {"\U0001d552": "", "\U0001d563": "[repeats]"}
+
+
+def plain_markers(line: str) -> tuple[str, str]:
+    """Strip tklr's row markers off a line. Returns (line, trailing note)."""
+    notes = [word for glyph, word in ROW_MARKERS.items() if glyph in line and word]
+    for glyph in ROW_MARKERS:
+        line = line.replace(glyph, "")
+    return re.sub(r"\s{2,}", " ", line).rstrip(), " ".join(notes)
+
+
+def annotate_alerts(lines: list[str], home: Path, now: datetime) -> list[str]:
+    """Append each listed occurrence's alert clock time to its line."""
+    starts = occurrence_starts(home)
+    if not starts:
+        return lines
+    offsets = alerts_by_record(home)
+    day: date | None = None
+    annotated: list[str] = []
+    for line in lines:
+        named = heading_date(line, now)
+        if named:
+            day = named
+            annotated.append(line)
+            continue
+        bare, repeats = plain_markers(line)
+        listed = LISTED_ID.search(bare)
+        start = starts.get((int(listed.group(1)), day)) if listed and day else None
+        if not start:
+            # A heading we could not read, a dateless task, or the `Tasks (0)`
+            # count -- which looks like an id and is not one.
+            annotated.append(bare)
+            continue
+        note = alert_note(offsets.get(int(listed.group(1)), []), start)
+        annotated.append(" ".join(p for p in (bare, note, repeats) if p))
+    return annotated
+
+
+# --- what day it is -------------------------------------------------------
+#
+# Nothing tklr prints says what today is, and `agenda`'s own day headings
+# carry no year. An agent asked for "tomorrow" therefore had to work the date
+# out for itself, and one that shelled out to `date` to check got the answer
+# wrong three times in a single conversation -- the 12th, the 13th, the 12th
+# again, for a day that was the 11th -- while `Tue, Aug 11, 2026` sat in the
+# output it was reading. Stating both ends removes the arithmetic and the
+# reason to go looking elsewhere.
+
+def spelled_date(when: date) -> str:
+    """'Tuesday, August 11, 2026'.
+
+    Long form on purpose. The compact renderings are the ones that get
+    misread: `date +%A,%Y-%m-%d` produces 'Tuesday,2026-08-11', weekday
+    welded to an ISO date with no space, and that is the exact string that
+    was in context on both occasions the date came back wrong.
+    """
+    return f"{when:%A, %B %-d, %Y}"
+
+
+def list_header(today: date, first: date | None, span: int) -> str:
+    """One line naming the days the list covers. Exactly one date in it.
+
+    An earlier version of this line named two: 'Today is Monday, August 10,
+    2026. Showing tomorrow, Tuesday, August 11, 2026.' The agent spliced them,
+    taking the weekday from the first and the day number from the second, and
+    answered for 'Monday, Aug 11' -- a date that does not exist. Two dates in
+    one sentence is a recombination hazard, so a range says where it starts
+    and lets the day headings enumerate the rest.
+    """
+    if first is None:
+        return (f"Everything still to come, soonest first. "
+                f"Today is {spelled_date(today)}.")
+    if span > 1:
+        return f"Showing {span} days starting {spelled_date(first)}."
+    if first == today:
+        return f"Showing today, {spelled_date(first)}."
+    if first == today + timedelta(days=1):
+        return f"Showing tomorrow, {spelled_date(first)}."
+    return f"Showing {spelled_date(first)}."
 
 
 def cmd_list(args, home: Path, now: datetime) -> int:
+    today = now.date()
+    span = 1
     if args.date:
-        start, _ = resolve_when(args.date, now)
-        start = start.split()[0]
-        span = str(args.days or 1)
+        resolved, _ = resolve_when(args.date, now)
+        parsed = parse_resolved(resolved)
+        first = parsed.date() if parsed else today
+        span = int(args.days or 1)
+        start = first.strftime("%Y-%m-%d")
     elif args.week:
-        start, span = "today", "7"
+        first, span, start = today, 7, "today"
     elif args.tomorrow:
-        start = (now.date() + timedelta(days=1)).strftime("%Y-%m-%d")
-        span = "1"
+        first = today + timedelta(days=1)
+        start = first.strftime("%Y-%m-%d")
     elif args.today:
-        start, span = "today", "1"
+        first, start = today, "today"
     else:
-        show_output(run_tklr(home, "agenda", "--plain", "--ids"))
-        return 0
-    show_output(run_tklr(home, "days", "--start", start, "--end", span, "--plain", "--ids"))
+        first = None
+
+    if first is None:
+        listed = run_tklr(home, "agenda", "--plain", "--ids", "--width", FULL_WIDTH)
+    else:
+        listed = run_tklr(home, "days", "--start", start, "--end", str(span),
+                          "--plain", "--ids", "--width", FULL_WIDTH)
+    print(list_header(today, first, span))
+    for line in annotate_alerts(clean_lines(listed), home, now):
+        print(line)
     return 0
 
 
@@ -710,11 +949,74 @@ def cmd_show(args, home: Path, now: datetime) -> int:
     return 0
 
 
+# `tklr find` takes no options at all and answers with the subject and the id
+# and nothing else, so "when is my next dentist appointment" comes back with
+# no date in it. The date is added here rather than left to a follow-up call,
+# because the failure mode is not a missing second call -- it is an agent that
+# answers "when" from the conversation instead of making one.
+
+FOUND_ID = re.compile(r"\((?:id\s+)?(\d+)\)\s*$")
+
+# A draft is what raw `tklr add` leaves behind, and its subject is the user's
+# whole sentence -- 'Dentist appointment next Friday at 2pm, remind an hour
+# before'. So the one row that fires nothing is also the row that reads most
+# like a confirmed reminder, and `?` is the only thing marking it. Observed
+# 2026-08-10: asked when the dentist appointment was, an agent read that
+# subject back as the appointment. The sigil is not enough; say it in words.
+DRAFT_NOTE = "[DRAFT: on no schedule, will notify nobody -- re-add it with `add`]"
+
+
+def next_occurrences(home: Path, now: datetime) -> dict[int, tuple[datetime, bool]]:
+    """{record id: (occurrence worth quoting, whether it is still ahead)}.
+
+    The soonest occurrence from now on, falling back to the most recent past
+    one for a reminder with nothing left -- "it was Tuesday" is an answer,
+    and silence gets filled in with a guess. Undated records are absent.
+    """
+    ahead: dict[int, datetime] = {}
+    behind: dict[int, datetime] = {}
+    for (rid, _), start in occurrence_starts(home).items():
+        if start >= now:
+            if rid not in ahead or start < ahead[rid]:
+                ahead[rid] = start
+        elif rid not in behind or start > behind[rid]:
+            behind[rid] = start
+    nearest = {rid: (start, True) for rid, start in ahead.items()}
+    for rid, start in behind.items():
+        nearest.setdefault(rid, (start, False))
+    return nearest
+
+
+def annotate_found(lines: list[str], home: Path, now: datetime) -> list[str]:
+    """Append the date, time and alert of each hit's nearest occurrence."""
+    upcoming = next_occurrences(home, now)
+    if not upcoming:
+        return lines
+    offsets = alerts_by_record(home)
+    annotated: list[str] = []
+    for line in lines:
+        hit = FOUND_ID.search(line)
+        found = upcoming.get(int(hit.group(1))) if hit else None
+        if not found:
+            annotated.append(f"{line} {DRAFT_NOTE}" if line.lstrip().startswith("?")
+                             else line)
+            continue
+        start, still_ahead = found
+        lead = "next" if still_ahead else "last was"
+        note = alert_note(offsets.get(int(hit.group(1)), []), start)
+        annotated.append(f"{line} [{lead} {spelled_date(start.date())} "
+                         f"at {start:%-H:%M}] {note}".rstrip())
+    return annotated
+
+
 def cmd_find(args, home: Path, now: datetime) -> int:
     if args.person:
-        show_output(run_tklr(home, "query", f"in b ^{re.escape(args.person)}$", "--ids"))
+        found = run_tklr(home, "query", f"in b ^{re.escape(args.person)}$", "--ids")
     else:
-        show_output(run_tklr(home, "find", args.text))
+        found = run_tklr(home, "find", args.text)
+    print(f"Today is {spelled_date(now.date())}.")
+    for line in annotate_found(clean_lines(found), home, now):
+        print(line)
     return 0
 
 
@@ -723,7 +1025,8 @@ def cmd_free(args, home: Path, now: datetime) -> int:
     day = when.split()[0]
     print(f"Everything on {day} — compare against it, and mind durations "
           f"and travel time:")
-    show_output(run_tklr(home, "days", "--start", day, "--end", "1", "--plain", "--ids"))
+    show_output(run_tklr(home, "days", "--start", day, "--end", "1",
+                         "--plain", "--ids", "--width", FULL_WIDTH))
     return 0
 
 
@@ -1137,6 +1440,11 @@ def verify_after_edit(home: Path, rid: int, now: datetime) -> None:
     if not offsets:
         print("  this reminder has no alert, so nobody will be notified")
         return
+
+    # Same line `add` prints. Without it an edit reported the new offset in
+    # tklr's own notation ('@a 15m') and left the agent to turn that into a
+    # clock time -- the one arithmetic step that has already gone wrong here.
+    report_alert_times(entry, token_value(entry, "s"), now)
 
     import sqlite3
     try:
@@ -2350,6 +2658,37 @@ def cmd_status(args, home: Path, now: datetime) -> int:
     return 0
 
 
+def unfireable_records(home: Path) -> list[str]:
+    """Reminders that exist but can never notify anyone.
+
+    The scheduled check used to look only at infrastructure -- workspace,
+    channels, dispatcher, cron -- so a workspace whose plumbing was perfect
+    reported healthy while holding a reminder that would never fire.
+
+    A draft (`?`) is the signature of something bypassing this wrapper. tklr
+    accepts `echo "dentist next friday 2pm" | tklr add` and answers
+    "Added 1 entry successfully", having parsed the whole sentence into a
+    dateless draft with no alert. That success message is the entire problem:
+    nothing downstream contradicts it, so the user is told the reminder is set
+    and finds out otherwise by not being reminded. Observed on 2026-08-10.
+    """
+    dated = {rid for (rid,) in workspace_rows(
+        home, "SELECT DISTINCT record_id FROM DateTimes")}
+    flagged = []
+    for rid, itemtype, subject in workspace_rows(
+            home, "SELECT id, itemtype, subject FROM Records ORDER BY id"):
+        label = " ".join((subject or "").split())[:60]
+        if itemtype == "?":
+            flagged.append(
+                f"reminder {rid} is a draft, so it fires nothing and is on no "
+                f"schedule: {label!r}. Drafts are never created by this "
+                f"wrapper, so something added it with raw tklr.")
+        elif itemtype == "*" and rid not in dated:
+            flagged.append(
+                f"event {rid} has no date on the schedule: {label!r}")
+    return flagged
+
+
 def cmd_health_check(args, home: Path, now: datetime) -> int:
     """Everything the scheduled health check does, in one command.
 
@@ -2404,12 +2743,24 @@ def cmd_health_check(args, home: Path, now: datetime) -> int:
         except (OSError, subprocess.SubprocessError) as exc:
             problems.append(f"could not run the dispatcher: {exc}")
 
-    if not problems:
+    # Kept apart from the infrastructure problems above because the remedy is
+    # not the same one. Setup rebuilds channels, dispatcher and cron; it does
+    # not touch records, so telling the agent to run setup for a stray draft
+    # sends it to a command that will report success and change nothing.
+    broken_records = unfireable_records(home)
+
+    if not problems and not broken_records:
         return 0
     for p in problems:
         print(p)
-    print("Tell the user to run /tklr-reminders setup, which rebuilds all of it. "
-          "Do not repair it yourself.")
+    if problems:
+        print("Tell the user to run /tklr-reminders setup, which rebuilds all of "
+              "it. Do not repair it yourself.")
+    for p in broken_records:
+        print(p)
+    if broken_records:
+        print("Setup does not fix these: each one is a record. Tell the user what "
+              "will not fire and offer to add it properly, naming the subject.")
     return 1
 
 

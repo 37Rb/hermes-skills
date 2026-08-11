@@ -138,6 +138,23 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    `uses`, `channels`, `status`, `setup`, `email`, `shortcut`, `welcome`.
    `python3 $R --help` lists them.
 
+   `tklr` is on the PATH and its subcommands look like they answer the
+   question, which is the whole trap. This rule gets broken by an assistant
+   that already knows what `tklr agenda` does, so here is what it returns:
+
+   ```
+   Tue Aug 11
+     8-9:00 Call with Alarm.com 𝕒
+   ```
+
+   No year, no alert time, subjects cut off at 40 columns, and `𝕒` is an
+   internal marker that has been read back to a user as "@a". `$R list
+   --tomorrow` returns the same events with the date spelled out, the alert
+   as a clock time, and the subject whole. Going direct does not fail
+   loudly — it produces a confident answer with the facts quietly missing,
+   and the missing facts then get filled in from the conversation. That is
+   the single way this skill has most often told a user a wrong time.
+
    **To change an existing reminder, use `edit`.** Never delete and re-add it:
    that is how the same reminder ends up on the schedule twice, and it throws
    away the id and the completion history. `edit` changes only the fields you

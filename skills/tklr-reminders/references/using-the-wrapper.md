@@ -71,6 +71,27 @@ Then *answer the question* — don't paste raw output. "You've got two things
 today: coffee with Sam at 11:30, and the budget review at 7. Your afternoon
 is clear."
 
+Every list opens by saying what day it is and which days it covers:
+
+```
+Today is Monday, August 10, 2026. Showing tomorrow, Tuesday, August 11, 2026.
+```
+
+Take the date from that line. Don't run `date`, and don't work out "tomorrow"
+yourself: an agent that did both got the day wrong three times in one
+conversation while the right answer sat in the output it was already reading.
+If what the header resolved isn't what the user meant, say so and re-run with
+`--date`, rather than quietly answering about a different day.
+
+Every timed row carries its own alert in brackets, already converted to a
+clock time: `* 8-9:00 Call with Alarm.com (3) [alert 7:30]`. Quote that time.
+Do not work it out from an offset you remember setting earlier in the
+conversation, and do not carry one item's offset across to another: a list is
+the only place the alerts for a day appear side by side, and reminders on one
+day routinely differ. A row reading `[no alert]` is a timed event that will
+notify nobody, which is worth saying out loud. An alert far enough ahead to
+fall on an earlier day carries that date with it.
+
 ### "Am I free Tuesday at 3pm?"
 
 Availability needs the events *and* their durations, because a 2pm meeting
@@ -203,17 +224,23 @@ Users never say ids. They say "the dentist thing", "Friday's meeting", "my 3pm",
 "next Monday's standup". Turning that into one record is the first half of every
 change, and getting it wrong on a delete is unrecoverable.
 
-**Search, then narrow with predicates.** `find` and `query` return ids and
-subjects but **no dates, times, or owners**, so never disambiguate from their
-output alone:
+**Search, then narrow with predicates.** `find` and `query` carry each hit's
+nearest occurrence and its alert, so a date is something you read rather than
+go and fetch:
 
 ```
 $ python3 $R find dentist
-* Dentist checkup (id 1)
-* Dentist follow-up (id 2)
-* Dentist for Jordan (id 3)
-~ Call dentist about insurance (id 4)      ← four matches, nothing to choose by
+Today is Monday, August 10, 2026.
+* Dentist checkup (id 1) [next Friday, August 14, 2026 at 9:00] [alert 8:00]
+* Dentist follow-up (id 2) [next Monday, September 7, 2026 at 9:00] [alert 8:00]
+* Dentist for Jordan (id 3) [last was Tuesday, July 28, 2026 at 16:00] [alert 15:30]
+~ Call dentist about insurance (id 4)      ← a task, so no occurrence to show
 ```
+
+That is the nearest occurrence, not the whole series, and it says nothing about
+**who** a reminder is for. A hit with no bracket is undated: a task, a note, or
+a draft. So it narrows "the dentist thing" to one record most of the time, and
+when several remain, still narrow with a predicate rather than picking:
 
 Compose a query instead — all of these are verified:
 

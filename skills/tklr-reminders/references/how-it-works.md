@@ -1,6 +1,6 @@
 # How it works, and what to do when it doesn't
 
-Background: the delivery mechanism, tklr's stale-cache bug, the SQLite the
+Background: the delivery mechanism, the engine's stale-cache bug, the SQLite the
 dispatcher uses, and the failure table. You need this to diagnose something, not
 to use the skill.
 
@@ -8,11 +8,11 @@ to use the skill.
 
 ### How delivery works
 
-tklr's own alerts only fire while its UI is running, and this skill never
-runs the UI. The dispatcher does exactly what tklr's UI does in
+the engine's own alerts only fire while its UI is running, and this skill never
+runs the UI. The dispatcher does exactly what its UI does in
 `execute_due_alerts()`, just from cron:
 
-1. `@a` on a reminder creates rows in tklr's `Alerts` table — **one row per
+1. An alert on a reminder creates rows in the engine's `Alerts` table — **one row per
    (offset × letter)**, each row a single delivery.
 2. A cron job runs `~/.hermes/scripts/tklr_alert_poller.py` every minute with
    `--no-agent`, so no LLM is involved.
@@ -68,14 +68,14 @@ The poller detects the fingerprint (a scheduled reminder with alerts but no
 with `--heal` right after you add or edit something with alerts just makes the
 repair immediate instead of up to a minute later.
 
-`--heal` is a flag on `tklr_alert_poller.py`, **not** a tklr option. tklr
-exposes no way to force a rebuild — that missing command is the whole reason
-the flag exists, and it is what the bug report asks for
-(`tklr rebuild --force`).
+`--heal` is a flag on `tklr_alert_poller.py`. The storage engine exposes no way
+to force a rebuild of its own derived state — that missing capability is the
+whole reason the flag exists, and a force-rebuild is what the upstream bug
+report asks for.
 
 ## Direct SQLite use
 
-**Use the `tklr` command for everything. Never open `tklr.db` yourself.**
+**Use `$R` for everything. Never open `tklr.db` yourself.**
 This applies to reads as much as writes — no `sqlite3` in your commands, no
 convenience queries, not even "just to check something". If a question seems
 to need SQL, it can almost certainly be answered with `$R find`,
@@ -83,7 +83,7 @@ to need SQL, it can almost certainly be answered with `$R find`,
 rather than reaching into the database.
 
 The only exceptions are three narrow cases inside
-`scripts/tklr_alert_poller.py`, each existing solely because tklr's CLI has
+`scripts/tklr_alert_poller.py`, each existing solely because the engine's CLI has
 no equivalent. Do not extend this list, and do not copy the pattern
 elsewhere:
 
@@ -92,33 +92,34 @@ elsewhere:
    `trigger_datetime >= now`, so an alert whose trigger has passed is never
    recreated. Keyed on `(record_id, start_datetime, alert_name,
    trigger_datetime)` — *not* `alert_id`, which
-   `tklr alerts --format json` reports as `null`.
+   the engine's own alerts listing reports as `null`.
 2. **Clearing two derived-state cache keys** (`datetimes`, `alerts`) to force
    the rebuild described above, plus the one `SELECT` that detects the
-   condition. These are caches tklr regenerates on its next command, not user
+   condition. These are caches the engine regenerates on its next command, not user
    data.
-3. **Reading due alerts** from the `Alerts` table. `tklr alerts` cannot serve
-   this: `get_alerts_for_window()` filters `trigger_datetime BETWEEN now AND
+3. **Reading due alerts** from the `Alerts` table. The engine's own alerts
+   listing cannot serve this: `get_alerts_for_window()` filters `trigger_datetime BETWEEN now AND
    window_end`, so it reports only alerts still in the *future* — a past-due
    alert is filtered out or replaced by a regenerated future row. A
    dispatcher that missed a tick would lose that alert permanently, so late
    alerts can only be found in the table.
 
-Everything else goes through the CLI. The table is refreshed by running
-`tklr alerts`, and the message text comes from the `[alerts]` command, which
-tklr renders with `{name}`, `{when}`, `{description}` and the rest — so the
-dispatcher never needs to read a record.
+Everything else goes through the engine's own CLI, which the poller calls
+internally. The table is refreshed by that alerts query, and the message text
+comes from the `[alerts]` command in `config.toml`, rendered with `{name}`,
+`{when}`, `{description}` and the rest — so the dispatcher never needs to read a
+record.
 
 ## When something isn't working
 
 | Symptom | Cause and fix |
 |---------|---------------|
-| A reminder never fires | `$R show <id>` — a leading `?` and an `@d Import error` mean it was rejected, which only happens to records written by calling `tklr` directly. Delete it and add it again through `$R`, which refuses the input that produces a draft. |
+| A reminder never fires | `$R show <id>` — it says `draft` and carries an import error if it was rejected, which only happens to records written without going through `$R`. Delete it and add it again through `$R`, which refuses the input that produces a draft. |
 | Added an event, no alert row appears | Stale derived state. `python3 ~/.hermes/scripts/tklr_alert_poller.py --heal` |
-| A just-added event is missing from `days`/`agenda` but `details <id>` shows it | Same stale derived state — run the dispatcher with `--heal`, then re-read. |
+| A just-added event is missing from `$R list` but `$R show <id>` shows it | Same stale derived state — run the dispatcher with `--heal`, then re-read. |
 | Alert fires but nothing arrives | Run the dispatcher by hand — it prints the failure and logs it. Then test the letter's command directly, e.g. `hermes send --to <target> test`. |
-| "command could not be parsed" | The subject or `@d` contains a `"`, which breaks `shlex`. Reword the reminder. |
-| "alert has no command" | The letter used in `@a` isn't defined in `[alerts]`. |
+| "command could not be parsed" | The subject or note contains a `"`, which breaks `shlex`. Reword the reminder. |
+| "alert has no command" | The channel letter on the alert isn't defined in `[alerts]`. |
 | Reminder delivered to nobody, but reported as sent | A letter is defined as a no-op (`true`, `:`). Replace it with a real delivery command. |
 | Alert delivered repeatedly | Its `Alerts` row isn't being deleted — check the log for a command that keeps failing, since a failing row is retried every minute by design. |
 | Nothing fires at all | `hermes cron list` — is `tklr-alert-poller` there? Is the scheduler running (`hermes cron status`)? |

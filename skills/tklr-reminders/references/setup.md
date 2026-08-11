@@ -20,7 +20,7 @@ H=~/.config/tklr
 
 ## Channel letters are the routing table
 
-Delivery is configured entirely in the `[alerts]` section of the tklr
+Delivery is configured entirely in the `[alerts]` section of the store's
 workspace's `config.toml`. Each key is a channel; its value is the command
 that performs the delivery:
 
@@ -34,7 +34,7 @@ a = 'hermes send --to PLATFORM:OTHER_TARGET --quiet "⏰ Reminder: {name} — st
 **the one this conversation is on** (*The two commands* in `SKILL.md`), and the real
 target is pasted from `hermes send --list`.
 
-tklr substitutes `{name}`, `{when}`, `{start}`, `{time}`, `{location}`, and
+The store substitutes `{name}`, `{when}`, `{start}`, `{time}`, `{location}`, and
 `{description}` before storing the command, so the message wording is config,
 not code.
 
@@ -47,34 +47,35 @@ Three constraints that shape everything:
   fixed command cannot know *whose* chat. Name them per person, e.g. `r`/`e`
   for Alex's chat/email, `a` for Jordan's chat.
 * **Commands run via `shlex.split`, not a shell.** Quote arguments containing
-  spaces; wrap pipes in `sh -c "..."`. A `"` inside a subject or `@d` breaks
+  spaces; wrap pipes in `sh -c "..."`. A `"` inside a subject or note breaks
   parsing — the dispatcher reports and drops such an alert rather than
   looping. Prefer typographic quotes in reminder text.
-* **Never put an apostrophe (`'`) in an alert command.** tklr rewrites
+* **Never put an apostrophe (`'`) in an alert command.** the store rewrites
   `config.toml` on every run and re-emits each value inside *single* quotes,
   so an apostrophe produces invalid TOML — and the run after that discards the
   whole `[alerts]` section as unparseable and rewrites the file without it.
   Your channel silently disappears two commands later. Write `It is time`, not
   `It's time`; use `{name}` rather than possessives.
 
-Combine freely: `@a 1d, 1h: r, e` is a day and an hour before, to Alex's chat
-and email. `@a 1h: r, a` alerts Alex and Jordan. Separate `@a` tokens give
-different people different lead times: `@a 1d: r @a 15m: a`.
+Combine freely: `--alert 1d,1h --via r,e` is a day and an hour before, to
+Alex's chat and email. `--alert 1h --via r,a` alerts Alex and Jordan. Giving
+different people different lead times takes one reminder each, since one
+reminder carries one set of offsets.
 
-> **Offsets are measured backwards from `@s`, not forwards from now.** This is
-> the easiest thing to get wrong, and it silently produces a reminder that
-> looks scheduled but stays quiet for hours:
+> **Offsets are measured backwards from the start time, not forwards from
+> now.** This is the easiest thing to get wrong, and it silently produces a
+> reminder that looks scheduled but stays quiet for hours:
 >
 > ```
-> now 16:50 ·  @s 18:00  @a 5m   →  fires 17:55, i.e. in 65 minutes
-> now 16:50 ·  @s 16:56  @a 5m   →  fires 16:51, i.e. in 1 minute
+> now 16:50 ·  starts 18:00, alert 5m  →  fires 17:55, i.e. in 65 minutes
+> now 16:50 ·  starts 16:56, alert 5m  →  fires 16:51, i.e. in 1 minute
 > ```
 >
-> To make an alert fire *n* minutes from now, set `@s` to
+> To make an alert fire *n* minutes from now, set the start to
 > `now + n + offset`. When you want a test that fires almost immediately,
 > compute the start time — don't pick a round hour.
 
-> **An undefined letter would make the whole entry invalid**, and tklr stores
+> **An undefined letter would make the whole entry invalid**, and the engine stores
 > such entries as silent drafts. `$R` refuses an unknown `--via` letter up
 > front and lists the ones that exist, so this cannot reach the database —
 > check with `$R channels`.
@@ -84,8 +85,8 @@ different people different lead times: `@a 1d: r @a 15m: a`.
 > so the reminder would reach nobody, silently.
 
 **Choose letters and offsets yourself, per reminder.** This is not a question
-for the user once setup is done. A flight deserves `@a 1d, 3h: r, e`; a meeting
-across the hall deserves `@a 10m: r`; a shared event gets everyone's letters.
+for the user once setup is done. A flight deserves `--alert 1d,3h --via r,e`; a meeting
+across the hall deserves `--alert 10m --via r`; a shared event gets everyone's letters.
 State what you chose in plain words — "I'll ping you an hour before, and email
 you the day before" — so they can correct it if they want something else.
 
@@ -228,12 +229,12 @@ python3 $S --remove r      # delete a letter
 
 It rejects uppercase/multi-character letters, the reserved `n`, and no-op
 commands like `true`, then verifies the letter round-trips and that
-`@a 1h: <letter>` validates. On success it prints:
+an alert on that letter validates. On success it prints:
 
 ```
 added 'r' and verified it:
-  survives tklr rewriting config.toml
-  '@a 1h: r' validates
+  survives a config.toml rewrite
+  an alert on 'r' validates
   configured letters: r
 ```
 
@@ -245,7 +246,7 @@ escaping, and `python3 $R email --to <address>` generates it correctly. The `$S 
 line above is what that command produces, shown so the shape is recognisable — not
 a thing to type.
 
-**Change the target, never the message text.** The only substitutions tklr
+**Change the target, never the message text.** The only substitutions the store
 makes are `{name}`, `{when}`, `{start}`, `{time}`, `{location}` and
 `{description}` — anything else you invent, like `{message}` or `{subject}`,
 is sent to the user *literally* and stays broken for the life of the letter.
@@ -261,7 +262,7 @@ alert actually arrived, which is the one thing you cannot check.
 ## First-run setup
 
 **Never run `install.sh`. `setup` runs it for you.** Running it alone leaves a
-machine with tklr present, no alert channel and no dispatcher scheduled, which
+machine already installed, with no alert channel and no dispatcher scheduled, which
 reports healthy and delivers nothing. There is no case where you run it by hand,
 so this section contains no command for it: what follows is what it does and how
 to read its failures when `setup` reports one.
@@ -338,7 +339,7 @@ Check positive evidence at each step. Every one of these must hold:
 
 ```bash
 
-# 0. The letters SURVIVE tklr rewriting its config. Run tklr twice — erasure
+# 0. The letters SURVIVE a config rewrite. Run any command twice — erasure
 #    takes two commands — then confirm the letters are still there. If any
 #    vanished, a value contains an apostrophe.
 python3 $R list >/dev/null 2>&1; python3 $R list >/dev/null 2>&1
@@ -349,7 +350,7 @@ python3 $R add --type event --subject Probe --when "in 90 minutes" --alert 5m --
 
 # 2. Create a test whose ALERT fires in ~3 minutes. Note the arithmetic:
 #    start = now + 8 min, offset 5m  ->  trigger = now + 3 min.
-#    The trigger MUST be at least 2 minutes out. tklr schedules no alert at
+#    The trigger MUST be at least 2 minutes out. no alert is scheduled at
 #    all for a trigger in the current minute or the past — silently, with the
 #    reminder still showing up in `list`. `add` now refuses that outright.
 #    Do NOT pick a round time like 18:00 — with a 5m offset that fires in an
@@ -375,7 +376,7 @@ machine is not proof it was received; only the recipient can confirm that.
 Finally, clean up the test reminder: `python3 $R delete <id>`.
 
 If step 4 reports `0 due, 0 sent, 0 still queued`, the reminder has no alerts —
-almost always an undefined `@a` letter or a draft, not a dispatcher fault.
+almost always an undefined channel letter or a draft, not a dispatcher fault.
 
 ## Offer the channels they are not using yet
 
@@ -401,7 +402,7 @@ Rules for this:
   nothing about email, that's an unanswered question and worth asking. If they
   explicitly said "not email for now", it is answered — respect it.
 * **A second channel is per-letter, not global.** Adding email means a new letter;
-  existing reminders keep their `@a` letters until changed. Say so, and offer to
+  existing reminders keep their channel letters until changed. Say so, and offer to
   add the new letter to anything important rather than silently leaving it
   chat-only.
 * Same verification bar as the first channel: a new letter is not working until an

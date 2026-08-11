@@ -8,14 +8,14 @@ user about what the skill does.
 line. Do not write a path here from memory: this file is read straight off disk
 and is never template-substituted, so an absolute path written here goes stale
 the moment the skill is installed anywhere else, and a stale one is what makes
-an agent give up on the wrapper and start calling `tklr` by hand.
+an agent give up on the wrapper and start reaching past it.
 Every example here is something **you** run. None of it is something the user
 should ever see or type — see *How to talk about this skill* in `SKILL.md`.
 
 ## People are bins
 
-People are attached with `--for`, which `tklr_agent_wrapper.py` turns into tklr's bin
-syntax for you:
+People are attached with `--for`, which `tklr_agent_wrapper.py` turns into the stored
+form for you:
 
 ```bash
 # Alex's appointment
@@ -27,13 +27,12 @@ python3 $R --type event --subject "Family budget review" --when "2026-08-03 7pm"
            --duration 1h --for alex,jordan --alert 1h --via r,a
 ```
 
-Underneath, `--for alex` becomes `@b alex/users`. Bins are written **leaf
-first**, so that reads "bin `alex`, inside bin `users`" — counterintuitive, and
-a reason not to hand-write it.
+Underneath this becomes a nested bin, written leaf first, which is
+counterintuitive enough on its own to be a reason never to hand-write it.
 
 Bins are for organising and answering questions — "what has Jordan got on
 Friday?", "show me everything for the lake house". They do **not** route
-alerts: that's the letter after the colon in `@a`, which already identifies a
+alerts: that is the channel letter on each alert, which already identifies a
 person and channel. Still attach people to reminders, so per-person queries
 work and it's clear who a reminder is for.
 
@@ -41,7 +40,7 @@ To see what a given person has:
 
 ```bash
 # Anchor the pattern: 'in b alex' is a substring regex that also matches
-# a bin named "Alexis". tklr matches case-insensitively.
+# a bin named "Alexis". the engine matches case-insensitively.
 python3 $R find --person alex
 ```
 
@@ -84,7 +83,8 @@ If what the header resolved isn't what the user meant, say so and re-run with
 `--date`, rather than quietly answering about a different day.
 
 Every timed row carries its own alert in brackets, already converted to a
-clock time: `* 8-9:00 Call with Alarm.com (3) [alert 7:30]`. Quote that time.
+clock time: `event: 8-9:00 Call with Alarm.com (3) [alert 7:30]`. Quote that
+time.
 Do not work it out from an offset you remember setting earlier in the
 conversation, and do not carry one item's offset across to another: a list is
 the only place the alerts for a day appear side by side, and reminders on one
@@ -95,7 +95,7 @@ fall on an earlier day carries that date with it.
 ### "Am I free Tuesday at 3pm?"
 
 Availability needs the events *and* their durations, because a 2pm meeting
-with `@e 1h30m` blocks 3pm.
+lasting 90 minutes blocks 3pm.
 
 ```bash
 python3 $R free --when "tuesday 3pm"
@@ -109,12 +109,12 @@ it:
 > so it'd be tight if it's across town. 3:30 would be safer.
 
 For a shared "when can we all meet", pull the same day for each person's bin
-and intersect the gaps. Check `@w` wrap (travel time) and `@e` extent before
+and intersect the gaps. Check travel time and duration before
 calling a slot open, and say so when a slot is only *technically* free.
 
 ## Creating things
 
-**Use `scripts/tklr_agent_wrapper.py`. Do not compose tklr entry strings by hand.**
+**Use `scripts/tklr_agent_wrapper.py`. Do not compose stored entries by hand.**
 
 ```bash
 
@@ -123,14 +123,19 @@ python3 $R --type event --subject "Coffee with Sam" --when "tomorrow 11:30" \
 ```
 
 ```
-created id 1: * Coffee with Sam @s 2026-08-01 11:30 @e 45m @b alex/users @a 1h, 15m: r
+created id 1:
+  event: Coffee with Sam
+    when: 2026-08-01 11:30
+    lasts: 45 minutes
+    for: alex
+    alerts: 1 hour and 15 minutes before, on channel r
   alert (1h before) fires 2026-08-01 10:30 — in 12 hours
   alert (15m before) fires 2026-08-01 11:15 — in 12 hours 45 min
 ```
 
 Named fields instead of sigils, and it does the whole chain in one call:
 resolves `--when` (so `tomorrow 3pm`, `next tuesday 9am`, `in 2 hours` all
-work — it computes the date, rather than relying on tklr's narrower parser),
+work — it computes the date, rather than relying on the engine's narrower parser),
 assembles the tokens, validates before writing, reads what the write actually
 reported, confirms the record is not a draft, heals derived state, and prints
 when each alert will fire.
@@ -176,12 +181,12 @@ exist), `--alert` without `--via`, a `--when` it cannot parse, a goal without
 reminder has **no alert** ("will not notify anyone") or no `--for`.
 
 There is no escape hatch for entries the flags cannot express. If a request
-needs something not listed above, say so rather than composing tklr tokens by
+needs something not listed above, say so rather than composing stored tokens by
 hand.
 
 ### `--repeat`: say how often, in words
 
-**This flag takes words. tklr's own recurrence syntax is refused.** Every value
+**This flag takes words. the engine's own recurrence syntax is refused.** Every value
 is translated and the translation is printed, so quote that back rather than
 what you typed:
 
@@ -215,36 +220,36 @@ times"`, `"three times a day at 8am, noon and 6pm"`.
 echoed, so `tue,thu` and `sept` do work, but a full name is the one spelling
 that is unambiguous in every flag, and `we` is a word as well as a Wednesday.
 
-**tklr's own recurrence syntax — a single frequency letter, optionally followed
+**the engine's own recurrence syntax — a single frequency letter, optionally followed
 by `&` options — is an error here, not a shortcut.** The wrapper recognises it
 only so it can tell you to say it in words. That syntax is deliberately not
 spelled out anywhere in this skill: it has no redundancy, it is what the agent
 has been measured getting wrong all week, and an example of it is something to
-copy. If you find it in a record's stored tokens, that is tklr's storage format,
+copy. If you find it in a record's stored tokens, that is the storage format,
 never an input.
 
 Anything it cannot read it refuses, and names what it accepts. It never guesses,
 so a refusal means ask or rephrase, not try another spelling.
 
 **Two things this skill does not support.** Say so plainly rather than reaching
-for tklr tokens: **week numbers** ("week 26 of the year"), and **several times a
+for stored tokens: **week numbers** ("week 26 of the year"), and **several times a
 day at times that are not whole hours**. The second is not a gap in the wording:
-tklr stores those as hours and minutes that combine as every pairing, so 9am and
+the engine stores those as hours and minutes that combine as every pairing, so 9am and
 5:30pm would also fire at 9:30 and 5pm. That is two reminders, not one.
 
 **A first occurrence more than about three months out reports "NOT on the
-schedule", and the record is fine.** tklr materialises occurrences inside a
+schedule", and the record is fine.** the engine materialises occurrences inside a
 generation horizon, and the check after a write cannot yet tell "the recurrence
 is wrong" from "the first occurrence is past the horizon". Measured 2026-08-11:
 a start on 2026-11-01 verified, 2026-12-01 did not, with the same `monthly`
 repeat. `"Easter"` and `"Good Friday"` land here too, since the next one is in
 April. Confirm with `show <id>` rather than repeating the write or running
-`--heal`, and tell the user it is scheduled further out than tklr has generated
+`--heal`, and tell the user it is scheduled further out than has been generated
 yet.
 
 ### What the user says → what you run
 
-All verified against tklr 1.0.43. `R` is `scripts/tklr_agent_wrapper.py`.
+All verified against the engine (tklr 1.0.43). `R` is `scripts/tklr_agent_wrapper.py`.
 
 | Request | Command |
 |---------|---------|
@@ -314,20 +319,22 @@ Use what the request already tells you: "Friday's dentist" gives you a date
 window, "Jordan's dentist" gives you a bin, "cancel my dentist appointment"
 rules out the task.
 
-**Then read the candidates.** `details` is what shows date, time and owner:
+**Then read the candidates.** `$R find dentist` names each hit with its next
+occurrence and its alert, which is usually enough to tell them apart:
 
 ```
-id 1   * Dentist checkup @s 2026-08-07 15:00 @e 1h @b alex @a 1d: r
-id 2   * Dentist follow-up @s 2026-09-11 10:00 @e 30m @b alex @a 1d: r
-id 3   * Dentist for Jordan @s 2026-08-07 09:00 @e 1h @b jordan @a 1d: r
+event: Dentist checkup (1) [next Friday, August 7, 2026 at 15:00] [alert 14:00]
+event: Dentist follow-up (2) [next Friday, September 11, 2026 at 10:00] [alert 9:00]
+event: Dentist for Jordan (3) [next Friday, August 7, 2026 at 9:00] [alert 8:00]
 ```
 
-Alternatively, when the request names a day, `days --start <date> --end 1
---plain --ids` lists that day *with times*, which is often the fastest route.
+`$R show <id>` gives one of them in full, including who it is for. When the
+request names a day, `$R list --date <date>` lists that day with times, which is
+often the fastest route.
 
 ### Confirm before mutating
 
-Deletes and moves are irreversible — tklr has no undo and no trash. So:
+Deletes and moves are irreversible — there is no undo and no trash. So:
 
 **Always confirm** a delete (any scope), a reschedule, and the delete-leg of an
 edit. **Don't confirm** adds or `finish` on an unambiguous task.
@@ -342,11 +349,15 @@ python3 $M delete 42 --dry-run
 ```
 WOULD delete the ENTIRE reminder, including every occurrence
   id 42: 'Dentist checkup'
-  * Dentist checkup @s 2026-08-07 15:00 @e 1h @b alex @a 1d: r
+  event: Dentist checkup
+    when: 2026-08-07 15:00
+    lasts: 1 hour
+    for: alex
+    alerts: 1 day before, on channel r
   (nothing was changed)
 ```
 
-Then put *that* to the user in plain language — the thing, not the tokens:
+Then put *that* to the user in plain language:
 
 > Cancelling the dentist checkup on Friday Aug 7 at 3pm — that's the one in
 > your calendar, not Jordan's 9am. Go ahead?
@@ -380,7 +391,7 @@ rather than yours.
 
 Always through `$R`. Every row below is a wrapper subcommand, and the wrapper is
 where the guards live: it resolves your datetimes, refuses an empty `--instance`
-that would otherwise delete a whole series, and routes around the tklr defects
+that would otherwise delete a whole series, and routes around the engine defects
 that make some of these unsafe done directly. `tklr_mutate.py` is the layer
 underneath and is documented further down for reading, not for calling.
 
@@ -428,9 +439,9 @@ silently reset the timing the user already chose.
 
 **Do not delete and re-add to change something.** Earlier versions of this
 document told you to, and it costs more than it looks: the record gets a new id,
-and `Completions`, `Pinned`, `Hashtags` and the `@b` bin links all cascade-delete
+and `Completions`, `Pinned`, `Hashtags` and the bin links all cascade-delete
 with the old row. For a repeating task that means wiping the completion history
-that tklr's own next-offset calculation reads. An edit touches none of it.
+that the engine's own next-offset calculation reads. An edit touches none of it.
 
 Nothing is destroyed by a failed edit. The replacement is parsed and finalized
 before anything is written, and if it does not parse, the record is left exactly
@@ -442,18 +453,18 @@ error: the edited entry for id 1 ('Lunch with Frank') was rejected; nothing was 
   The record is untouched, so the original is still intact.
 ```
 
-`edit` then re-checks the alerts, because saving regenerates tklr's derived
+`edit` then re-checks the alerts, because saving regenerates the derived
 tables and only FUTURE alerts survive that. It reports `verified: N alert(s)
 queued`, or warns outright when a reminder has ended up with no alert and a start
 time in the past.
 
 Read the record first when you need to tell the user what is changing:
-`$R show <id>`. Note `details` collapses bin paths to the leaf (`@b alex`, not
-`@b alex/users`); that is display only, and an edit preserves the real link.
+`$R show <id>`. It names the leaf of a bin path rather than the whole path;
+that is display only, and an edit preserves the real link.
 
 ### What you can and cannot change
 
-tklr's own CLI has **no edit command and no delete command**, and `finish` only
+the engine's own CLI has **no edit command and no delete command**, and `finish` only
 works on tasks. Verified on 1.0.43. The wrapper covers all of it, and the wrapper
 is what you call:
 
@@ -468,22 +479,22 @@ is what you call:
 | change any other detail | `$R edit <id> --<field> <value>` |
 
 **Moving one occurrence splits it off into its own reminder.** That is
-deliberate: on tklr 1.0.43 a recurring record that stores a moved occurrence
+deliberate: on the engine (tklr 1.0.43) a recurring record that stores a moved occurrence
 generates **no occurrences at all**, so `move` excludes the old date from the
 series and creates the moved one as a separate dated reminder carrying the
 original's duration, alerts, people and details. Tell the user it is now
 separate only if they would notice — they asked to move one thing, and it moved.
 
-`status` also reports any reminder already in that state, since tklr's own
+`status` also reports any reminder already in that state, since the engine's own
 reschedule and its UI both produce it without the skill involved.
 
 **Call `$R`, not `$M`.** The shim takes no natural-language datetimes and has
-none of the guards: `$R` resolves "tomorrow 2pm" before tklr ever sees it,
+none of the guards: `$R` resolves "tomorrow 2pm" before the engine ever sees it,
 refuses an empty `--instance` instead of silently deleting the whole series, and
 never writes the token that empties a schedule. Reaching past the wrapper is how
 a reminder ended up on the schedule at two different times.
 
-If tklr's internals have moved, the shim refuses and prints the current
+If the engine's internals have moved, the shim refuses and prints the current
 signature. **Do not** go hunting for the renamed function and patch the script
 on the fly. Report the signature it gives you, say the skill needs updating, and
 stop.
@@ -503,7 +514,7 @@ it again later adds to the list instead of un-skipping them. Each date is
 checked against the schedule first: one that is not an occurrence is refused,
 because writing it would report success and change nothing.
 
-Underneath, tklr can only exclude ONE occurrence per record — `delete
+Underneath, the engine can only exclude ONE occurrence per record — `delete
 --instance` writes `@- 20260811T0900`, and a second call is declined — so
 anything beyond the first is written as a whole-list token edit instead. That
 is a detail of the shim, not something to reason about: the reminder keeps its
@@ -512,11 +523,11 @@ delete and re-add a record to skip a date.
 
 Separate `@-` tokens are rejected — `@- <dt> @- <dt>` fails validation. The
 comma form is verified: both occurrences disappear from the series and the rest
-survive. `--instance` accepts any datetime tklr can parse (`2026-08-11 09:00`,
+survive. `--instance` accepts any datetime the engine can parse (`2026-08-11 09:00`,
 `9:00`, and `9a` all work) but it must resolve to an occurrence that actually
-exists, or tklr declines.
+exists, or the write is declined.
 
 Always re-run the dispatcher's heal command
 (`python3 ~/.hermes/scripts/tklr_alert_poller.py --heal`) after a change that
-touches alerts. Note `--heal` is a flag on *our* dispatcher script, not a tklr
+touches alerts. Note `--heal` is a flag on *our* dispatcher script, not an engine
 option.

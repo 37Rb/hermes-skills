@@ -115,7 +115,7 @@ def use_token(use: str, type_name: str) -> str:
     # type '~' reminders"), but failing here names the right alternative.
     if type_name != "jot":
         die(f"--use only means something on a jot; this is a {type_name}.",
-            "Jots are tklr's time-tracking type: a timestamped line, how",
+            "Jots are the time-tracking type: a timestamped line, how",
             "long it took (--duration), and the category it counts toward.")
     if not re.fullmatch(r"[A-Za-z0-9][\w.-]*", use):
         die(f"--use {use!r} is not a use name",
@@ -454,11 +454,11 @@ def run_tklr(home: Path, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([exe, "--home", str(home), *args],
                               capture_output=True, text=True, timeout=120)
     except FileNotFoundError:
-        die("tklr is not installed or not on PATH",
+        die("this skill is not set up on this machine yet",
             "Run: tklr_agent_wrapper.py setup --platform <the platform you are on>",
-            "(it installs tklr and everything else in one command)")
+            "(it installs everything needed, in one command)")
     except subprocess.SubprocessError as exc:
-        die(f"tklr failed to run: {exc}")
+        die(f"the storage engine failed to run: {exc}")
 
 
 def configured_letters(home: Path) -> dict[str, str]:
@@ -698,7 +698,7 @@ def repeat_hours(text: str) -> list[int] | None:
         return None
     if any(m for m in minutes):
         die("--repeat can only take whole hours for several times a day",
-            f"Read {text.strip()!r} as {len(hours)} times, but tklr combines "
+            f"Read {text.strip()!r} as {len(hours)} times, but the store combines "
             "hours and minutes as every pairing, so a half hour on one of them "
             "lands on all of them.",
             "Use whole hours, or file one reminder per time.")
@@ -718,7 +718,7 @@ def tklr_recurrence(value: str, now: datetime | None = None) -> str:
     now = now or datetime.now()
     said = " ".join(value.split())
     if TKLR_RECURRENCE.fullmatch(said):
-        die(f"--repeat {value!r} is tklr's own syntax, which this takes no more",
+        die(f"--repeat {value!r} is stored-format syntax, which this takes no more",
             "Say it in words instead:",
             "  'daily'  'weekly'  'monthly'  'yearly'",
             "  'weekdays'  'weekends'  'Tuesdays and Thursdays'",
@@ -825,7 +825,7 @@ def tklr_recurrence(value: str, now: datetime | None = None) -> str:
                 "month'), or when to stop ('weekly 4 times', 'weekly until "
                 "December 25').",
                 "If none of those says it, this skill does not support that "
-                "recurrence yet. Say so rather than composing tklr tokens.")
+                "recurrence yet. Say so rather than composing stored tokens.")
 
     ordered = [d for d in ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
                if d in days]
@@ -1180,7 +1180,7 @@ def check_alert_margin(offsets, resolved, now: datetime, warnings: list) -> None
         for off, fires in doomed:
             warnings.append(
                 f"alert {off} before would fire at {stamp(fires, now)}, too soon to "
-                f"be scheduled — tklr will skip that one; the others still stand")
+                f"be scheduled — the store will skip that one; the others still stand")
         return
 
     off, fires = doomed[0]
@@ -1190,7 +1190,7 @@ def check_alert_margin(offsets, resolved, now: datetime, warnings: list) -> None
     die(f"that alert would never fire — it lands at {fires:%Y-%m-%d %H:%M}, {detail}",
         f"start {start:%Y-%m-%d %H:%M} minus {off} = {fires:%H:%M}, and it is now "
         f"{now:%H:%M}.",
-        f"tklr only schedules an alert at least {int(MIN_ALERT_MARGIN.total_seconds() // 60)} "
+        f"an alert is only scheduled at least {int(MIN_ALERT_MARGIN.total_seconds() // 60)} "
         "minutes out; anything sooner is dropped with no warning.",
         "Either start it later or use a smaller offset — e.g. for a test, "
         "start 8 minutes out with --alert 5m.")
@@ -1327,7 +1327,7 @@ def entry_in_words(entry: str) -> list[str]:
         lines.append(f"  {label}: {value}")
     if unknown:
         lines.append(f"  ({unknown} further stored field(s) this wrapper does "
-                     f"not describe; inspect with tklr itself if it matters)")
+                     f"not describe)")
     return lines
 
 
@@ -1961,7 +1961,7 @@ def skip_occurrences(home: Path, rid: int, entry: str, wanted: list[str],
     if still:
         die(f"id {rid} still has {len(still)} of those occurrence(s) scheduled: "
             + ", ".join(still),
-            "The entry was written but tklr did not drop them.")
+            "The entry was written but the old occurrences were not dropped.")
     print(f"  {len(compacted)} occurrence(s) skipped; "
           f"{len(after)} still scheduled")
     return 0
@@ -2207,8 +2207,8 @@ def verify_after_edit(home: Path, rid: int, now: datetime) -> None:
     else:
         start = parse_resolved(token_value(entry, "s"))
         if start and start > now:
-            print("  verified: on the schedule; alerts are beyond tklr's "
-                  "generation horizon and will be created closer to the time")
+            print("  verified: on the schedule; alerts are beyond the "
+                  "generation window and will be created closer to the time")
         else:
             print("  WARNING: no alert is queued and the start time has passed — "
                   "nobody will be notified")
@@ -2299,7 +2299,7 @@ def cmd_move(args, home: Path, now: datetime) -> int:
     # --instance as a bare date.
     if not instance_had_time:
         print(f"note: --instance {instance} names a whole day. If that "
-              "occurrence has a time, include it or tklr will not match it.",
+              "occurrence has a time, include it or it will not match.",
               file=sys.stderr)
     return move_occurrence(home, args.id, entry, instance, to_when, now,
                            args.dry_run)
@@ -2320,8 +2320,8 @@ def refuse_plus_on_recurring(entry: str) -> None:
     """
     if has_token(entry, "r") and has_token(entry, "+"):
         die("that reminder would never appear on the schedule",
-            "A repeating reminder that carries an extra date (@+) generates no "
-            "occurrences at all on tklr 1.0.43 — the whole series, not just "
+            "A repeating reminder that also carries an extra one-off date generates no "
+            "occurrences at all on the engine 1.0.43 — the whole series, not just "
             "that date.",
             "Add the repeating reminder without the @+, then add the extra "
             "date as its own reminder.")
@@ -2406,11 +2406,11 @@ def move_occurrence(home: Path, rid: int, entry: str, instance: str,
     after, _ = occurrence_window(home, rid)
     if old in after:
         die(f"id {rid} still has an occurrence at {instance}",
-            "The entry was written but tklr did not drop the old time.")
+            "The entry was written but the old time was not dropped.")
     print(f"moved: {instance} → {to_when}")
     print(f"  id {rid} no longer occurs at {instance}; the moved one is now a "
           "separate reminder")
-    print(f"  (tklr 1.0.43 drops the whole series if a moved occurrence is "
+    print(f"  (the engine drops the whole series if a moved occurrence is "
           "stored on the record itself)")
     return 0
 
@@ -2544,13 +2544,13 @@ def run_installer(home: Path) -> None:
     if proc.returncode != 0:
         print(out, file=sys.stderr)
         die("install.sh failed — see its output above.",
-            "tklr itself is not usable, so nothing further will work.")
+            "the storage engine is not usable, so nothing further will work.")
 
     version = ""
     for line in out.splitlines():
         if "installed —" in line or "already installed —" in line:
             version = line.split("—", 1)[1].strip()
-    print(f"tklr: ready{f' ({version})' if version else ''}")
+    print(f"storage engine: ready{f' ({version})' if version else ''}")
 
 
 # True/False when the schedule could be read, None when it could not.
@@ -3318,10 +3318,10 @@ def report_workspace_agreement(home: Path) -> None:
 
     mine = tklr_own_home()
     if mine is None:
-        print("  `tklr` by hand: could not ask tklr where it looks")
+        print("  workspace the engine resolves: could not be determined")
     elif mine != home:
-        print(f"  `tklr` by hand: {mine}")
-        print("    MISMATCH — a person typing `tklr` sees a different workspace")
+        print(f"  workspace the engine resolves: {mine}")
+        print("    MISMATCH — the engine resolves a different workspace than this")
         print("    than the agent uses. Usually TKLR_HOME or XDG_CONFIG_HOME set")
         print("    for one and not the other.")
 
@@ -3350,9 +3350,9 @@ def report_vanished_records(home: Path) -> None:
     if not rows:
         return
     print(f"  {len(rows)} reminder(s) are NOT on the schedule at all, because "
-          "tklr drops a whole")
+          "the engine drops a whole")
     print("    series once a moved occurrence is stored on the record "
-          "(rescheduled in tklr's UI?):")
+          "(rescheduled in the engine's own UI?):")
     for rid, subject in rows[:5]:
         print(f"      id {rid}: {subject!r}")
     print("    Fix each by removing its moved date and adding that one as its "
@@ -3615,7 +3615,7 @@ def verify_scheduled(home: Path, record_id: int, entry: str, resolved: str | Non
     if resolved and not occurrences:
         die(f"id {record_id} was saved but is NOT on the schedule "
             "(no occurrence was generated)",
-            heal_failed or "tklr's derived tables are stale.",
+            heal_failed or "the derived tables are stale.",
             f"Fix: python3 {POLLER} --heal --verbose",
             f"Then confirm with: {sys.argv[0]} show {record_id}")
 
@@ -3648,7 +3648,7 @@ def verify_scheduled(home: Path, record_id: int, entry: str, resolved: str | Non
     if not alert_rows and soonest is not None and soonest <= end_of_day:
         die(f"id {record_id} was saved but NO ALERT was scheduled — nobody will "
             "be notified",
-            heal_failed or "The alert row tklr should have generated is missing.",
+            heal_failed or "The alert row that should have been generated is missing.",
             f"Fix: python3 {POLLER} --heal --verbose",
             f"If that does not help, delete it and re-add with the alert further "
             f"out: {sys.argv[0]} delete {record_id}")
@@ -3657,7 +3657,7 @@ def verify_scheduled(home: Path, record_id: int, entry: str, resolved: str | Non
         print(f"  verified: on the schedule, {alert_rows} alert"
               f"{'s' if alert_rows != 1 else ''} queued")
     elif wanted_alert:
-        print("  verified: on the schedule; alert is beyond tklr's generation "
+        print("  verified: on the schedule; alert is beyond the generation "
               "horizon and will be created closer to the time")
 
 
@@ -3673,8 +3673,8 @@ def main() -> int:
         description=(
             "The single interface for calendars, reminders and alerts.\n"
             "\n"
-            "Run THIS, never `tklr` itself. It takes named flags and returns plain\n"
-            "English. tklr's own syntax is sigil-dense and fails silently — a wrong\n"
+            "Run THIS for everything. It takes named flags and returns plain\n"
+            "English. The stored format is sigil-dense and fails silently — a wrong\n"
             "sigil becomes a record that quietly never fires, where a wrong flag is\n"
             "rejected here immediately.\n"
             "\n"
@@ -3694,7 +3694,7 @@ def main() -> int:
             "  --alert takes offsets BEFORE the start (1d,1h,15m); --via takes the\n"
             "  channel letters they are delivered on. Both are needed for anyone to\n"
             "  be notified. A trigger less than 2 minutes away is refused, because\n"
-            "  tklr would schedule nothing and say nothing.\n"
+            "  nothing would be scheduled and nothing said.\n"
             "\n"
             "  Delivery itself is not done here — tklr_alert_poller.py runs every\n"
             "  minute from the host agent's scheduler and sends what is due.\n"
@@ -3704,7 +3704,7 @@ def main() -> int:
             "  `setup` refuses it, and a workspace anywhere else is never polled.\n"
             "\n"
             "exit codes: 0 success, 1 refused or failed, 2 usage error.\n"))
-    ap.add_argument("--home", help="tklr workspace (default $TKLR_HOME or ~/.config/tklr)")
+    ap.add_argument("--home", help="workspace directory (default $TKLR_HOME or ~/.config/tklr)")
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="<subcommand>")
 
     a = sub.add_parser(
@@ -3720,13 +3720,13 @@ def main() -> int:
             "    --alert 1d,1h   fire 1 day and 1 hour BEFORE the start\n"
             "    --via r,e       deliver on channels r and e (see `channels`)\n"
             "  The trigger (start minus offset) must be at least 2 minutes out.\n"
-            "  Closer than that, tklr schedules nothing and reports nothing, so\n"
+            "  Closer than that, nothing is scheduled and nothing reported, so\n"
             "  this refuses instead. For a quick test: --when \"in 8 minutes\"\n"
             "  --alert 5m, which fires in 3.\n"
             "\n"
             "recurring:\n"
             "  --repeat takes the days, or how often, in words. It prints the\n"
-            "  tklr recurrence it read them as, and refuses what it cannot\n"
+            "  recurrence it read them as, and refuses what it cannot\n"
             "  read rather than guessing.\n"
             "    --repeat \"Tuesdays and Thursdays\"  those two days\n"
             "    --repeat \"weekdays\"               Mon to Fri\n"
@@ -3739,7 +3739,7 @@ def main() -> int:
             "    --repeat \"weekly until December 25\"\n"
             "    --repeat \"twice a day at 9am and 5pm\"\n"
             "    --repeat \"Easter\" / \"Good Friday\"\n"
-            "  Write day and month names out in full. tklr's own recurrence\n"
+            "  Write day and month names out in full. The stored recurrence\n"
             "  syntax is REFUSED, not accepted: it will tell you to say it in\n"
             "  words. Week numbers, and several times a day at other than\n"
             "  whole hours, are not supported -- say so.\n"
@@ -3932,7 +3932,7 @@ def main() -> int:
         description=(
             "Register a short second name, so the skill can be invoked without\n"
             "typing the full one. Changes the HOST's configuration, not the\n"
-            "skill's or tklr's: nothing about reminders, channels or delivery\n"
+            "skill's or the store's: nothing about reminders, channels or delivery\n"
             "is affected, and removing it later is a host matter too.\n"
             "\n"
             "Run this only when the user has asked for it. It refuses a name\n"
@@ -3971,7 +3971,7 @@ def main() -> int:
     # everything worked.
     if args.cmd == "setup" and args.home:
         die(f"setup cannot use --home {args.home!r}",
-            f"The workspace is {tklr_home(None)}, which is where `tklr` looks "
+            f"The workspace is {tklr_home(None)}, which is where the store lives "
             "and where the dispatcher polls.",
             "A workspace anywhere else is never polled and never delivers.",
             "Re-run without --home. To move the default, set TKLR_HOME or",

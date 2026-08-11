@@ -354,6 +354,24 @@ def insert_at(tokens: list[dict], key: str) -> int:
     return len(tokens)
 
 
+def child_of(tok: dict, key: str) -> bool:
+    """Is `tok` an `&`-option belonging to `@key`?
+
+    tklr stores `@r d &w TU,TH` as TWO top-level tokens -- `@r d` (carrying the
+    same `&w` in a `_children` list) and a sibling `&w TU,TH` marked
+    `parent: 'r'`. `token_key` reports None for the sibling, because it only
+    answers for `t == '@'`, so neither the remove pass nor the set pass below
+    could see it. Replacing `@r` therefore dropped `@r d` and left the old
+    `&w TU,TH` standing, and the rebuilt entry read
+    `@r d &w MO,WE,FR &w TU,TH`: the days the user asked for, plus the days
+    they were replacing. Measured on 2026-08-10.
+
+    Keyed on `parent` rather than on `r` specifically, so any token that grows
+    `&`-options is covered the same way.
+    """
+    return tok.get("t") == "&" and tok.get("parent") == key
+
+
 def apply_token_changes(tokens: list[dict], subject: str | None,
                         sets: dict[str, list[str]], removes: list[str]) -> bool:
     """Mutate `tokens` in place. Returns True iff anything actually changed.
@@ -361,7 +379,8 @@ def apply_token_changes(tokens: list[dict], subject: str | None,
     `sets` REPLACES every token of a key rather than editing the first one,
     because several keys legitimately repeat (`@b` once per person, `@~` once
     per project step). Replacing the whole group is the only rule that behaves
-    the same for a repeating key and a single one.
+    the same for a repeating key and a single one. Replacing a group takes its
+    `&`-options with it; see `child_of`.
     """
     changed = False
 
@@ -379,7 +398,7 @@ def apply_token_changes(tokens: list[dict], subject: str | None,
             changed = True
 
     for key in removes:
-        kept = [t for t in tokens if token_key(t) != key]
+        kept = [t for t in tokens if token_key(t) != key and not child_of(t, key)]
         if len(kept) != len(tokens):
             tokens[:] = kept
             changed = True
@@ -387,10 +406,16 @@ def apply_token_changes(tokens: list[dict], subject: str | None,
     for key, values in sets.items():
         existing = [i for i, t in enumerate(tokens) if token_key(t) == key]
         replacement = [{"token": v, "t": "@", "k": key} for v in values]
-        if existing and [tokens[i].get("token") for i in existing] == values:
+        # "already exactly this" has to account for the `&`-options too:
+        # `@r d` with a stale `&w TU,TH` beside it is NOT already `@r d`, and
+        # skipping it here would leave the days the caller asked to drop.
+        if (existing
+                and [tokens[i].get("token") for i in existing] == values
+                and not any(child_of(t, key) for t in tokens)):
             continue                       # already exactly this
         where = existing[0] if existing else insert_at(tokens, key)
-        tokens[:] = [t for t in tokens if token_key(t) != key]
+        tokens[:] = [t for t in tokens
+                     if token_key(t) != key and not child_of(t, key)]
         tokens[where:where] = replacement
         changed = True
 

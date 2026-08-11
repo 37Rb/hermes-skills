@@ -1644,6 +1644,17 @@ def cmd_list(args, home: Path, now: datetime) -> int:
     else:
         first = None
 
+    # Ask for the occurrences before reading them. Without this, a range past the
+    # generated window prints a heading and nothing under it, which reads as an
+    # empty calendar and is the worst answer this command can give.
+    short = None
+    if first is not None:
+        last = first + timedelta(days=max(span - 1, 0))
+        if not ensure_generated(home, last):
+            through = generated_through(home)
+            short = (f"{through[:4]}-{through[4:6]}-{through[6:8]}"
+                     if through and len(through) >= 8 else None)
+
     if first is None:
         listed = run_tklr(home, "agenda", "--plain", "--ids", "--width", FULL_WIDTH)
     else:
@@ -1652,6 +1663,10 @@ def cmd_list(args, home: Path, now: datetime) -> int:
     print(list_header(today, first, span))
     for line in rows_say_the_type(annotate_alerts(clean_lines(listed), home, now)):
         print(line)
+    if short:
+        print(f"  NOTE: only dates up to {short} have been worked out, so "
+              f"anything later is missing from this list rather than absent. "
+              f"Say that rather than reporting an empty day.")
     return 0
 
 
@@ -1721,19 +1736,44 @@ def next_occurrences(home: Path, now: datetime) -> dict[int, tuple[datetime, boo
     return nearest
 
 
+def record_dated(home: Path, rid: int) -> bool:
+    """Does this record carry a start at all? Undated tasks legitimately have none."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{home / 'tklr.db'}?mode=ro", uri=True, timeout=15)
+        try:
+            row = conn.execute(
+                "SELECT rruleset FROM Records WHERE id = ?", (rid,)).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    return bool(row and str(row[0] or "").strip())
+
+
 def annotate_found(lines: list[str], home: Path, now: datetime) -> list[str]:
-    """Append the date, time and alert of each hit's nearest occurrence."""
+    """Append the date, time and alert of each hit's nearest occurrence.
+
+    A hit whose occurrences have not been worked out yet is labelled as such.
+    Silently leaving the date off is how "when is my next X" gets answered from
+    the conversation instead of from the record.
+    """
     upcoming = next_occurrences(home, now)
-    if not upcoming:
-        return lines
     offsets = alerts_by_record(home)
     annotated: list[str] = []
     for line in lines:
         hit = FOUND_ID.search(line)
         found = upcoming.get(int(hit.group(1))) if hit else None
         if not found:
-            annotated.append(f"{line} {DRAFT_NOTE}" if line.lstrip().startswith("?")
-                             else line)
+            if line.lstrip().startswith("?"):
+                annotated.append(f"{line} {DRAFT_NOTE}")
+            elif hit and record_dated(home, int(hit.group(1))):
+                # It has a start, so it is not an undated task: its occurrences
+                # simply have not been worked out this far ahead.
+                annotated.append(f"{line} [scheduled further ahead than has been "
+                                 f"worked out; use `show <id>` for its start]")
+            else:
+                annotated.append(line)
             continue
         start, still_ahead = found
         lead = "next" if still_ahead else "last was"
@@ -1763,6 +1803,9 @@ def free_rows(proc: subprocess.CompletedProcess[str]) -> None:
 def cmd_free(args, home: Path, now: datetime) -> int:
     when, has_time = resolve_when(args.when, now)
     day = when.split()[0]
+    parsed = parse_resolved(when)
+    if parsed:
+        ensure_generated(home, parsed.date())
     print(f"Everything on {day} — compare against it, and mind durations "
           f"and travel time:")
     free_rows(run_tklr(home, "days", "--start", day, "--end", "1",
@@ -1879,6 +1922,135 @@ def compact(resolved: str) -> str | None:
     """'2026-08-10 09:00' -> '20260810T0900', the form tklr stores and `@-` takes."""
     parsed = parse_resolved(resolved)
     return parsed.strftime("%Y%m%dT%H%M") if parsed else None
+
+
+# --- the generation window ------------------------------------------------
+#
+# The engine does not compute a repeating reminder's occurrences on demand. It
+# materialises them into a table for a bounded span ahead -- measured 2026-08-11
+# at about three months -- and extends that span as time passes. Reads outside
+# it come back EMPTY and successful.
+#
+# The engine ships the fix for this and calls it from its own week view:
+# `ensure_week_generated_with_topup(year, week, ...)` extends the table to cover
+# a requested week. Nothing on the CLI path calls it, so asking for March 2027
+# reports an empty calendar with exit 0, and this wrapper repeated the lie
+# because it reads the same table. So the wrapper asks for the extension itself
+# before it reads, and says so plainly when it cannot get one.
+
+def generated_through(home: Path) -> str | None:
+    """The last occurrence the engine has materialised for anything, or None."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{home / 'tklr.db'}?mode=ro", uri=True, timeout=15)
+        try:
+            row = conn.execute("SELECT MAX(start_datetime) FROM DateTimes").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    return str(row[0])[:8] if row and row[0] else None
+
+
+def ensure_generated(home: Path, through: date) -> bool:
+    """Materialise occurrences out to `through`. True if the window now covers it.
+
+    Best effort by design: this reaches into the engine's own API, which is a
+    thing to do only because the alternative is answering "what have I got in
+    March" with silence. A failure here is never fatal -- the caller reports the
+    limit instead of pretending the calendar is empty.
+    """
+    have = generated_through(home)
+    if have and have >= through.strftime("%Y%m%d"):
+        return True
+
+    exe = shutil.which("tklr")
+    python = Path(exe).resolve().parent / "python" if exe else None
+    if not python or not python.exists():
+        return False
+
+    year, week = through.isocalendar()[:2]
+    # cushion/topup mirror the values the engine's own week view passes, so the
+    # table ends up in the shape its own navigation would have produced.
+    # The environment object takes no arguments and resolves the workspace the
+    # same way the command line does, so the home is handed over the same way:
+    # in the variable the child inherits, set for the child only.
+    code = (
+        "from tklr.tklr_env import TklrEnvironment;"
+        "from tklr.model import DatabaseManager;"
+        "env = TklrEnvironment();"
+        "db = DatabaseManager(str(env.db_path), env);"
+        f"db.ensure_week_generated_with_topup({year}, {week}, cushion=6, "
+        "topup_threshold=2)"
+    )
+    saved = os.getenv("TKLR_HOME")
+    os.putenv("TKLR_HOME", str(home))
+    try:
+        proc = subprocess.run([str(python), "-c", code],
+                              cwd=str(Path.home()),
+                              capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        if saved is not None:
+            os.putenv("TKLR_HOME", saved)
+    if proc.returncode != 0:
+        return False
+    have = generated_through(home)
+    return bool(have and have >= through.strftime("%Y%m%d"))
+
+
+def computed_next_occurrence(home: Path, rid: int, now: datetime) -> str | None:
+    """The record's next occurrence worked out from its rule, not from the table.
+
+    The materialised table cannot answer "is this rule any good" for a date past
+    the generated span, and the two possible reasons for an empty answer need
+    different replies: a rule that fires in 2028 is fine, a rule that never fires
+    is a silent dud. The rule itself can be asked, so it is asked here.
+
+    Runs under the engine's interpreter because the date library that understands
+    these rules ships with the engine, not with this one. None means "could not
+    work it out", which is not the same as "there is no next occurrence" -- the
+    caller treats it as unknown.
+    """
+    exe = shutil.which("tklr")
+    python = Path(exe).resolve().parent / "python" if exe else None
+    if not python or not python.exists():
+        return None
+    code = (
+        "import sqlite3, sys, datetime;"
+        "from dateutil.rrule import rrulestr;"
+        f"c = sqlite3.connect('file:{home / 'tklr.db'}?mode=ro', uri=True);"
+        f"row = c.execute('SELECT rruleset FROM Records WHERE id = ?', ({rid},)).fetchone();"
+        "text = (row[0] if row else '') or '';"
+        "sys.exit(0) if not text.strip() else None;"
+        "nxt = rrulestr(text, ignoretz=True)"
+        f".after(datetime.datetime({now.year}, {now.month}, {now.day}));"
+        "print(nxt.strftime('%Y-%m-%d %H:%M') if nxt else 'NONE')"
+    )
+    try:
+        proc = subprocess.run([str(python), "-c", code],
+                              capture_output=True, text=True, timeout=90)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not out:
+        return None
+    return out
+
+
+def occurrence_count(home: Path, rid: int) -> int:
+    """How many occurrences are currently worked out for this record."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{home / 'tklr.db'}?mode=ro", uri=True, timeout=15)
+        try:
+            return conn.execute(
+                "SELECT COUNT(*) FROM DateTimes WHERE record_id = ?", (rid,)).fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return 0
 
 
 def occurrence_window(home: Path, rid: int) -> tuple[set[str], str | None]:
@@ -3613,11 +3785,49 @@ def verify_scheduled(home: Path, record_id: int, entry: str, resolved: str | Non
     start = parse_resolved(resolved)
 
     if resolved and not occurrences:
-        die(f"id {record_id} was saved but is NOT on the schedule "
-            "(no occurrence was generated)",
-            heal_failed or "the derived tables are stale.",
-            f"Fix: python3 {POLLER} --heal --verbose",
-            f"Then confirm with: {sys.argv[0]} show {record_id}")
+        # Zero occurrences has TWO causes and this used to report only one. The
+        # other is a start later than anything worked out yet, which is not a
+        # fault at all: the engine materialises a bounded span ahead. Measured
+        # 2026-08-11 at about three months, so "Easter" -- next April -- failed
+        # here every time, on a record that was saved and correct, with advice to
+        # run --heal that could not have helped.
+        #
+        # Asked for first, because a reminder that can be worked out should be:
+        # then the check below is the honest one again.
+        if start and ensure_generated(home, start.date()):
+            occurrences = occurrence_count(home, record_id)
+        if not occurrences:
+            # Still nothing. Ask the RULE, because the start is not the same
+            # thing as the first occurrence: "Easter" starting in April 2027
+            # first fires at Easter 2028, since Easter 2027 precedes the start.
+            # Comparing the start against the window said "not beyond" and sent
+            # a perfectly good reminder to the hard error below.
+            computed = computed_next_occurrence(home, record_id, now)
+            if computed and computed != "NONE":
+                through = generated_through(home)
+                said = (f" (worked out through {through[:4]}-{through[4:6]}-"
+                        f"{through[6:8]})" if through and len(through) >= 8 else "")
+                print(f"  saved. Its next occurrence is {computed}, which is "
+                      f"further ahead than the schedule has been worked out"
+                      f"{said}, so no alert exists yet. That is expected for a "
+                      f"distant date, not a fault. Confirm with: "
+                      f"{sys.argv[0]} show {record_id}")
+                return
+            if computed == "NONE":
+                # The rule itself yields nothing, ever. Saying "the tables are
+                # stale" and sending the caller to --heal would be a wrong
+                # diagnosis of a real fault, and healing changes nothing here.
+                die(f"id {record_id} was saved, but its repeat produces no "
+                    f"occurrences at all, so it will never fire",
+                    "Usually an end date that falls before the start, or a "
+                    "position in a period that never comes round.",
+                    f"Delete it with: {sys.argv[0]} delete {record_id}",
+                    "Then add it again with a repeat that can happen.")
+            die(f"id {record_id} was saved but is NOT on the schedule "
+                "(no occurrence was generated)",
+                heal_failed or "the derived tables are stale.",
+                f"Fix: python3 {POLLER} --heal --verbose",
+                f"Then confirm with: {sys.argv[0]} show {record_id}")
 
     if not wanted_alert:
         return

@@ -439,7 +439,15 @@ def clean_list(value: str | None) -> list[str]:
 # So the days a person says are translated here instead. tklr syntax still
 # passes through untouched, which keeps every documented example valid.
 
-WEEKDAYS = {
+# NOT `WEEKDAYS`: that name is already taken, 300 lines up, by the map of day
+# name to weekday NUMBER that `resolve_when` uses for "--when tuesday 10am".
+# Defining a second `WEEKDAYS` here shadowed it, because the later module-level
+# binding is the one every function sees at call time, and
+# `(WEEKDAYS[rest] - now.weekday()) % 7` then raised
+# `TypeError: unsupported operand type(s) for -: 'str' and 'int'` -- a raw
+# traceback, on the single most ordinary thing a person says. Caught by a drive
+# on 2026-08-11, one day after the collision was introduced.
+RECURRENCE_DAYS = {
     "mo": "MO", "mon": "MO", "monday": "MO", "mondays": "MO",
     "tu": "TU", "tue": "TU", "tues": "TU", "tuesday": "TU", "tuesdays": "TU",
     "we": "WE", "wed": "WE", "weds": "WE", "wednesday": "WE", "wednesdays": "WE",
@@ -517,8 +525,8 @@ def tklr_recurrence(value: str) -> str:
     for word in words:
         if word in DAY_GROUPS:
             days += DAY_GROUPS[word].split(",")
-        elif word in WEEKDAYS:
-            days.append(WEEKDAYS[word])
+        elif word in RECURRENCE_DAYS:
+            days.append(RECURRENCE_DAYS[word])
         elif word in FREQUENCY_WORDS:
             # The last frequency word wins, so "every 2 weeks on Tuesday"
             # keeps `w` and does not fight the day list below.
@@ -929,7 +937,7 @@ def heading_date(line: str, now: datetime) -> date | None:
                          r"(?:,\s*(\d{4}))?", text)
     if not named:
         return None
-    month = MONTHS.get(named.group(1))
+    month = LISTED_MONTHS.get(named.group(1))
     if not month:
         return None
     day = int(named.group(2))
@@ -966,7 +974,14 @@ def alert_note(offsets: list[str], start: datetime) -> str:
     return f"[{'alert' if len(times) == 1 else 'alerts'} {', '.join(times)}]"
 
 
-MONTHS = {m: i for i, m in enumerate(
+# Title-case, because this one reads tklr's OWN output ("Tue, Aug 11"), not
+# something a person typed. It must not be called `MONTHS`: that name belongs to
+# the lower-case map 800 lines up that `resolve_when` looks up after lowering the
+# user's text, and defining this second one shadowed it, so `--when "aug 15"` --
+# the exact form in the worked-examples table -- answered "could not understand".
+# Same collision as RECURRENCE_DAYS above; both were caught by a drive on
+# 2026-08-11.
+LISTED_MONTHS = {m: i for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1)}
 

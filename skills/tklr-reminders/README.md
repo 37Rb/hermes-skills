@@ -195,8 +195,6 @@ That loads the skill and it takes it from there: installs tklr, creates the work
 
 **On Matrix and Slack, type `!tklr-reminders setup` instead.** Those clients reserve `/` for their own commands, so a typed `/` never reaches Hermes; their adapters accept `!` and rewrite it. Every other platform uses `/`.
 
-The same trick helps later on. `/tklr-reminders what can you do?` or `/tklr-reminders add my dentist appointment` both reload the skill *and* give it the task, which is more reliable on a small model than the command alone.
-
 ### A shorter name
 
 `/tklr-reminders` is a lot to type for something you reach for several times a day. You can register `/tklr` as an alias for the same skill:
@@ -208,6 +206,10 @@ hermes gateway restart
 ```
 
 On Matrix and Slack it is `!tklr`, for the same reason `!tklr-reminders` applies there.
+
+Do this before you need it, because everything below uses `/tklr`. The long name never stops working, so if you would rather not register anything, read `/tklr` as `/tklr-reminders` throughout.
+
+The same trick helps later on. `/tklr what can you do?` or `/tklr add my dentist appointment` both reload the skill *and* give it the task, which is more reliable on a small model than the command alone.
 
 <details>
 <summary>What the installer does</summary>

@@ -124,15 +124,14 @@ def use_token(use: str, type_name: str) -> str:
     return f"@u {use}"
 
 
-WEEKDAYS = {
-    "monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1,
-    "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
-    "friday": 4, "fri": 4, "saturday": 5, "sat": 5, "sunday": 6, "sun": 6,
-}
-
-MONTHS = {m: i for i, m in enumerate(
-    ["jan", "feb", "mar", "apr", "may", "jun",
-     "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+# Day and month spellings live in ONE place each, further down:
+# RECURRENCE_DAYS (spelling -> "MO") and MONTH_WORDS (spelling -> 1..12). This
+# file has now produced three bugs from keeping a second copy of one of these --
+# `WEEKDAYS` shadowed and crashed `--when tuesday 10am`, `MONTHS` shadowed and
+# broke `--when "aug 15"`, and a filtered copy rendered September as "Sept" --
+# so there is no second copy. The only thing kept here is the map from the
+# canonical day code to its weekday number, which is not a spelling.
+WEEKDAY_NUMBER = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
 
 warnings: list[str] = []
 
@@ -296,8 +295,8 @@ def resolve_when(text: str, now: datetime) -> tuple[str, bool]:
         target_day = now.date() + timedelta(days=1)
     elif rest == "yesterday":
         target_day = now.date() - timedelta(days=1)
-    elif rest in WEEKDAYS:
-        ahead = (WEEKDAYS[rest] - now.weekday()) % 7
+    elif rest in RECURRENCE_DAYS:
+        ahead = (WEEKDAY_NUMBER[RECURRENCE_DAYS[rest]] - now.weekday()) % 7
         if ahead == 0:
             ahead = 7  # "friday" on a Friday means the next one
         target_day = now.date() + timedelta(days=ahead)
@@ -311,16 +310,20 @@ def resolve_when(text: str, now: datetime) -> tuple[str, bool]:
                 yr += 2000
             target_day = safe_date(yr, mo, dy, text)
         else:
-            m = re.fullmatch(r"([a-z]{3,9})\s+(\d{1,2})(?:,?\s*(\d{4}))?", rest) \
-                or re.fullmatch(r"(\d{1,2})\s+([a-z]{3,9})(?:,?\s*(\d{4}))?", rest)
+            # A trailing full stop is allowed through to the lookup, which
+            # strips it: "aug. 15" is a normal way to write a date and used to
+            # be refused while "augment 15" was accepted.
+            m = re.fullmatch(r"([a-z]{3,9}\.?)\s+(\d{1,2})(?:,?\s*(\d{4}))?", rest) \
+                or re.fullmatch(r"(\d{1,2})\s+([a-z]{3,9}\.?)(?:,?\s*(\d{4}))?", rest)
             if m:
                 a, b = m.group(1), m.group(2)
-                name, dnum = (a, b) if a[:3] in MONTHS else (b, a)
-                if name[:3] not in MONTHS:
+                name, dnum = (a, b) if a.rstrip(".") in MONTH_WORDS else (b, a)
+                name = name.rstrip(".")
+                if name not in MONTH_WORDS:
                     target_day = None
                 else:
                     yr = int(m.group(3) or now.year)
-                    target_day = safe_date(yr, MONTHS[name[:3]], int(dnum), text)
+                    target_day = safe_date(yr, MONTH_WORDS[name], int(dnum), text)
 
     if target_day is None:
         die(f"could not understand --when {text!r}",

@@ -164,11 +164,28 @@ There is no escape hatch for entries the flags cannot express. If a request
 needs something not listed above, say so rather than composing tklr tokens by
 hand.
 
-### `--repeat`: the recurrence grammar
+### `--repeat`: say the days
 
-`--repeat` is the one flag whose value is tklr's own syntax, passed through
-unchanged as `@r`. **Plain English does not work** — `--repeat daily` is
-rejected. It takes a frequency character, then optional `&` options:
+**Say the days or how often, in words.** All of these work, and each one
+prints the tklr recurrence it was read as, so you can quote the right thing
+back to the user:
+
+```bash
+--repeat "Tuesdays and Thursdays"   read as: d &w TU,TH
+--repeat "tue,thu"                  read as: d &w TU,TH
+--repeat "weekdays"                 read as: d &w MO,TU,WE,TH,FR
+--repeat "daily"                    read as: d
+--repeat "every other Tuesday"      read as: w &i 2 &w TU
+--repeat "every 3 weeks"            read as: w &i 3
+```
+
+Anything it cannot read it refuses, naming what it accepts. It never guesses,
+so a refusal means ask or rephrase, not try another spelling.
+
+The rest of this section is tklr's own grammar. It still passes through
+untouched, so every example below is valid, and it is what you need for the
+cases words do not cover: months, month days, Easter. It takes a frequency
+character, then optional `&` options:
 
 | Frequency | Meaning |
 |-----------|---------|
@@ -202,6 +219,7 @@ All verified against tklr 1.0.43. `R` is `scripts/tklr_agent_wrapper.py`.
 | "Pay the mortgage on the 1st every month" | `--type task --subject "Pay mortgage" --when 2026-08-01 --repeat "m &i 1" --priority 1 --for alex --alert 1d --via r,e` |
 | "Our anniversary is Aug 15, remind us both a week ahead" | `--type event --subject Anniversary --when "aug 15" --repeat y --for alex,jordan --alert 1w,1d --via r,a` |
 | "1:1 with Dana every other Tuesday at 10" | `--type event --subject "1:1 with Dana" --when "2026-08-04 10am" --duration 30m --repeat "w &i 2 &w TU" --for alex --alert 10m --via r` |
+| "Jordan has swimming Tuesdays and Thursdays at 5:30, remind me 45 minutes before" | `--type event --subject "Jordan swimming" --when "2026-08-11 5:30pm" --duration 1h --repeat "Tuesdays and Thursdays" --for jordan --alert 45m --via r` |
 | "Remember to buy milk" | `--type task --subject "Buy milk" --for alex` |
 | "Renew my passport by Sept 1, start warning me a month out" | `--type task --subject "Renew passport" --when 2026-09-01 --priority 1 --notice 30d --for alex --alert 1w --via r` |
 | "Water the plants every 3 days after I last did it" | `--type task --subject "Water plants" --when 2026-08-01 --offset 3d --for alex --alert 1h --via r` |
@@ -215,6 +233,12 @@ All verified against tklr 1.0.43. `R` is `scripts/tklr_agent_wrapper.py`.
 | "Jot down that I am taking a walk" | `--type jot --subject "Taking a walk" --for alex` (timestamped now; pass `--when` for a different time) |
 | "That walk took an hour and a quarter, count it as exercise" | this follows the row above, so it edits that jot rather than filing a second one: `edit <id> --duration 1h15m --use exercise.walking` |
 | "Where did my time go this month?" | `uses` (add `--use exercise` to filter, `--months 2607-2608` for a range) |
+
+**`--when` is when the thing happens, never when the reminder fires.** "Class
+is at 5:30, remind me 45 minutes before" is `--when 5:30pm --alert 45m`, not
+`--when 4:45pm`. Doing the subtraction yourself loses the only record of when
+the class actually is, so every later question about it is answered wrong, and
+an alert on top of it fires 45 minutes before the wrong time.
 
 ## Changing and completing things
 

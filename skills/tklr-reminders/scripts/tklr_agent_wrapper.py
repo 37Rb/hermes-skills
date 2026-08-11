@@ -422,6 +422,150 @@ def clean_list(value: str | None) -> list[str]:
     return [p.strip() for p in (value or "").split(",") if p.strip()]
 
 
+# --- recurrence -----------------------------------------------------------
+#
+# `--repeat` was the one flag that passed tklr's own grammar straight through,
+# and it is the flag people reach for most: children's activities, weekly
+# meetings, bin day. Measured 2026-08-10 on "Jack has jiu jitsu Tuesdays and
+# Thursdays at 5:30pm": the agent had read the reference, and still spent ten
+# round trips on `Tu Th`, `w & Tu`, `w TU`, `w &  Tu`, gave up on recurrence,
+# created two wrong records and never answered the user. The turn timed out.
+#
+# tklr's refusal is what makes it a loop rather than one wrong guess: `Tu Th`
+# earns "'tu th' is not a supported frequency. Choose from: y (YEARLY),
+# m (MONTHLY), w (WEEKLY)..." -- a list that invites `w TU`, which earns the
+# same sentence. Nothing in it mentions `&w`, the part that names the days.
+#
+# So the days a person says are translated here instead. tklr syntax still
+# passes through untouched, which keeps every documented example valid.
+
+WEEKDAYS = {
+    "mo": "MO", "mon": "MO", "monday": "MO", "mondays": "MO",
+    "tu": "TU", "tue": "TU", "tues": "TU", "tuesday": "TU", "tuesdays": "TU",
+    "we": "WE", "wed": "WE", "weds": "WE", "wednesday": "WE", "wednesdays": "WE",
+    "th": "TH", "thu": "TH", "thur": "TH", "thurs": "TH", "thursday": "TH",
+    "thursdays": "TH",
+    "fr": "FR", "fri": "FR", "friday": "FR", "fridays": "FR",
+    "sa": "SA", "sat": "SA", "saturday": "SA", "saturdays": "SA",
+    "su": "SU", "sun": "SU", "sunday": "SU", "sundays": "SU",
+}
+
+# Frequency words, and the single characters tklr wants for them. `m` for
+# "monthly" and `n` for "minutely" are tklr's, not a typo: `n` was chosen
+# upstream because `m` was taken.
+FREQUENCY_WORDS = {
+    # The bare characters are here as well as the words, so a half-remembered
+    # `w TU` becomes `w &w TU` instead of being refused. That exact string was
+    # guessed twice in the measured run: the frequency was right and only the
+    # `&w` was missing, which is the one thing tklr's error never mentions.
+    "y": "y", "m": "m", "w": "w", "d": "d", "h": "h", "n": "n",
+    "daily": "d", "day": "d", "days": "d",
+    "weekly": "w", "week": "w", "weeks": "w",
+    "monthly": "m", "month": "m", "months": "m",
+    "yearly": "y", "annually": "y", "annual": "y", "year": "y", "years": "y",
+    "hourly": "h", "hour": "h", "hours": "h",
+    "minutely": "n", "minute": "n", "minutes": "n",
+}
+
+# A value that is already tklr's grammar: a frequency character alone, or one
+# followed by `&`-options. Checked before anything is translated so every
+# example in the reference keeps working byte for byte.
+#
+# Each `&` must be followed by an option letter, which is what separates
+# tklr's `w &i 2 &w TU` from the near-miss `w & Tu` -- the second was guessed
+# in the measured run, and passing it through only reproduced tklr's looping
+# refusal. Anything that is not exactly this shape gets translated instead.
+TKLR_RECURRENCE = re.compile(r"[ymwdhn](\s+&[a-zA-Z]\s+\S+)*$", re.IGNORECASE)
+
+DAY_GROUPS = {
+    "weekday": "MO,TU,WE,TH,FR", "weekdays": "MO,TU,WE,TH,FR",
+    "weekend": "SA,SU", "weekends": "SA,SU",
+}
+
+TIMES_OF_DAY = ("morning", "mornings", "afternoon", "afternoons", "evening",
+                "evenings", "night", "nights", "noon", "midnight")
+
+
+def tklr_recurrence(value: str) -> str:
+    """tklr's `@r` grammar, from either tklr's grammar or a person's words.
+
+    Understands what people actually say -- 'Tuesdays and Thursdays',
+    'tue,thu', 'every other Tuesday', 'every 3 weeks', 'weekdays', 'daily' --
+    and refuses anything it cannot read, naming the grammar, rather than
+    handing it to tklr to refuse in a way that loops.
+    """
+    said = " ".join(value.split())
+    if TKLR_RECURRENCE.fullmatch(said):
+        return said
+
+    words = [w for w in re.split(r"[\s,;/]+|\band\b|&", said.lower()) if w]
+    if not words:
+        die("--repeat needs a value")
+
+    # "every other X" and "every 3 weeks" set the interval; the words that
+    # survive still say which days.
+    interval = None
+    if words[:2] == ["every", "other"]:
+        interval, words = 2, words[2:]
+    elif words and words[0] == "every":
+        words = words[1:]
+    if words and words[0].isdigit():
+        interval, words = int(words[0]), words[1:]
+
+    days: list[str] = []
+    frequency = None
+    for word in words:
+        if word in DAY_GROUPS:
+            days += DAY_GROUPS[word].split(",")
+        elif word in WEEKDAYS:
+            days.append(WEEKDAYS[word])
+        elif word in FREQUENCY_WORDS:
+            # The last frequency word wins, so "every 2 weeks on Tuesday"
+            # keeps `w` and does not fight the day list below.
+            frequency = FREQUENCY_WORDS[word]
+        elif word in ("on", "at", "the", "of", "each", "repeating", "repeat"):
+            continue
+        elif word in TIMES_OF_DAY:
+            # "every Sunday night" is a real thing to say. The clock time
+            # belongs to --when, so the word is dropped -- but said out loud,
+            # because silently discarding half of what the user said is how a
+            # reminder ends up at the wrong hour with nobody suspicious.
+            warnings.append(f"--repeat carries the days, not the time: {word!r} "
+                            f"was ignored, so check --when says the hour")
+        else:
+            die(f"--repeat {value!r} is not something I can turn into a "
+                f"recurrence",
+                "Give the days ('Tuesdays and Thursdays', 'weekdays'), a "
+                "frequency ('daily', 'every 3 weeks', 'every other Tuesday'), "
+                "or tklr's own grammar (a frequency character y m w d h n, "
+                "then optional & options).")
+
+    ordered = [d for d in ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+               if d in days]
+    if ordered:
+        # Days are expressed as a restriction on a frequency, never on their
+        # own. Weekly-with-an-interval keeps `w` so "every other Tuesday" means
+        # a fortnight; otherwise `d &w` is what tklr's own weekday example
+        # uses, and it is the form that generates one occurrence per named day.
+        frequency = "w" if interval and interval > 1 else (frequency or "d")
+        if frequency in ("m", "y"):
+            frequency = "d"
+        built = frequency
+        if interval and interval > 1:
+            built += f" &i {interval}"
+        built += f" &w {','.join(ordered)}"
+    elif frequency:
+        built = frequency + (f" &i {interval}" if interval and interval > 1 else "")
+    else:
+        die(f"--repeat {value!r} names no days and no frequency",
+            "Say the days ('Tuesdays and Thursdays') or how often ('daily', "
+            "'every 3 weeks').")
+
+    if built != said:
+        warnings.append(f"read --repeat {value!r} as tklr's {built!r}")
+    return built
+
+
 # ---------------------------------------------------------------------------
 # entry assembly
 # ---------------------------------------------------------------------------
@@ -469,7 +613,7 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
         parts.append(f"@e {args.duration.strip()}")
 
     if args.repeat:
-        parts.append(f"@r {args.repeat.strip()}")
+        parts.append(f"@r {tklr_recurrence(args.repeat)}")
 
     if args.target:
         if not re.fullmatch(r"\d+/\d+[wdhms]", args.target.strip()):
@@ -1302,7 +1446,7 @@ def cmd_edit(args, home: Path, now: datetime) -> int:
         sets.append(f"@e {args.duration.strip()}")
 
     if args.repeat:
-        sets.append(f"@r {args.repeat.strip()}")
+        sets.append(f"@r {tklr_recurrence(args.repeat)}")
 
     if args.use:
         # The type comes off the stored entry rather than a flag: this is the
@@ -2968,12 +3112,15 @@ def main() -> int:
             "  --alert 5m, which fires in 3.\n"
             "\n"
             "recurring:\n"
-            "  --repeat takes tklr recurrence, not plain English: a frequency\n"
-            "  character (y m w d h n) then optional & options.\n"
-            "    --repeat \"d\"                    every day\n"
-            "    --repeat \"d &w MO,TU,WE,TH,FR\"  every weekday\n"
-            "    --repeat \"w &i 2 &w TU\"         every other Tuesday\n"
-            "    --repeat \"m &d -1\"              last day of the month\n"
+            "  --repeat takes the days, or how often, in words. It prints the\n"
+            "  tklr recurrence it read them as, and refuses what it cannot\n"
+            "  read rather than guessing.\n"
+            "    --repeat \"Tuesdays and Thursdays\"  those two days\n"
+            "    --repeat \"weekdays\"               Mon to Fri\n"
+            "    --repeat \"daily\"                  every day\n"
+            "    --repeat \"every other Tuesday\"    fortnightly\n"
+            "  tklr's own grammar still works unchanged, and covers months,\n"
+            "  month days and Easter: \"m &d -1\" is the last day of the month.\n"
             "  See the recurrence table in references/using-the-wrapper.md.\n"
             "\n"
             "projects:\n"

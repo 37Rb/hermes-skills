@@ -603,8 +603,9 @@ def main() -> int:
                 print(
                     "  Nothing was due AND nothing is queued. If you expected a "
                     "test alert, the reminder probably has no alerts at all — "
-                    "check it is not a draft ('?') and that its @a letter is "
-                    "defined in the [alerts] section of config.toml."
+                    "check with `show <id>`, which says whether it is a draft "
+                    "and which channel each alert uses, and check that channel "
+                    "is configured with `channels`."
                 )
         conn.close()
         return 0

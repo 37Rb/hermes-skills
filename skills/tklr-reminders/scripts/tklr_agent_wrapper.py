@@ -516,11 +516,11 @@ RECURRENCE_DAYS = {
 # "monthly" and `n` for "minutely" are tklr's, not a typo: `n` was chosen
 # upstream because `m` was taken.
 FREQUENCY_WORDS = {
-    # The bare characters are here as well as the words, so a half-remembered
-    # `w TU` becomes `w &w TU` instead of being refused. That exact string was
-    # guessed twice in the measured run: the frequency was right and only the
-    # `&w` was missing, which is the one thing tklr's error never mentions.
-    "y": "y", "m": "m", "w": "w", "d": "d", "h": "h", "n": "n",
+    # The bare characters are deliberately NOT here. They were, so that a
+    # half-remembered `w TU` still landed, but a terse spelling that works is a
+    # terse spelling the model will reach for again and eventually get wrong --
+    # which is the whole reason this vocabulary exists. `w TU` now earns the
+    # refusal that lists the words.
     "daily": "d", "day": "d", "days": "d",
     "weekly": "w", "week": "w", "weeks": "w",
     "monthly": "m", "month": "m", "months": "m",
@@ -530,13 +530,11 @@ FREQUENCY_WORDS = {
 }
 
 # A value that is already tklr's grammar: a frequency character alone, or one
-# followed by `&`-options. Checked before anything is translated so every
-# example in the reference keeps working byte for byte.
-#
-# Each `&` must be followed by an option letter, which is what separates
-# tklr's `w &i 2 &w TU` from the near-miss `w & Tu` -- the second was guessed
-# in the measured run, and passing it through only reproduced tklr's looping
-# refusal. Anything that is not exactly this shape gets translated instead.
+# followed by `&`-options. This used to be a pass-through and is now a REFUSAL:
+# the skill takes words, and grammar that works is grammar the model will keep
+# writing until the day it writes it wrong. Detected rather than merely rejected
+# so the error can say "that is tklr syntax" and list the words, instead of the
+# generic "cannot read that", which is what sent it guessing last time.
 TKLR_RECURRENCE = re.compile(r"[ymwdhn](\s+&[a-zA-Z]\s+\S+)*$", re.IGNORECASE)
 
 DAY_GROUPS = {
@@ -547,20 +545,244 @@ DAY_GROUPS = {
 TIMES_OF_DAY = ("morning", "mornings", "afternoon", "afternoons", "evening",
                 "evenings", "night", "nights", "noon", "midnight")
 
+# --- the monthly patterns, in words ----------------------------------------
+#
+# These are the cases the reference used to reach by printing tklr grammar at
+# the agent -- `m &d -1`, `m &i 1` -- and terse grammar is what it has been
+# measured getting wrong all week. `&d` (month day), `&s` (set position) and a
+# signed `&w` prefix are not things to teach a model three characters at a
+# time; they are things to say.
 
-def tklr_recurrence(value: str) -> str:
-    """tklr's `@r` grammar, from either tklr's grammar or a person's words.
+ORDINALS = {
+    "first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3,
+    "fourth": 4, "4th": 4, "fifth": 5, "5th": 5, "last": -1,
+}
 
-    Understands what people actually say -- 'Tuesdays and Thursdays',
-    'tue,thu', 'every other Tuesday', 'every 3 weeks', 'weekdays', 'daily' --
-    and refuses anything it cannot read, naming the grammar, rather than
-    handing it to tklr to refuse in a way that loops.
+# Exact words only, never a prefix. `resolve_when` matches months on the first
+# three characters of any word, which is why it reads "augment 15" as August the
+# 15th; this table is the shape that mistake argues for.
+MONTH_WORDS = {}
+for _i, _full in enumerate(
+        ["january", "february", "march", "april", "may", "june", "july",
+         "august", "september", "october", "november", "december"], start=1):
+    MONTH_WORDS[_full] = _i
+    MONTH_WORDS[_full[:3]] = _i
+MONTH_WORDS["sept"] = 9
+
+_DAY_NAMES = "|".join(sorted(RECURRENCE_DAYS, key=len, reverse=True))
+_ORDINAL_NAMES = "|".join(sorted(ORDINALS, key=len, reverse=True))
+_MONTH_NAMES = "|".join(sorted(MONTH_WORDS, key=len, reverse=True))
+
+# "first Monday of the month", "last Friday". The trailing "of the month" is
+# optional because an ordinal in front of a weekday can only mean a position
+# within the month, and requiring the phrase would refuse the shorter thing
+# people actually say.
+NTH_WEEKDAY = re.compile(
+    rf"^(?:on\s+|the\s+|every\s+|each\s+)*({_ORDINAL_NAMES})\s+({_DAY_NAMES})"
+    rf"(?:\s+of\s+(?:the\s+|each\s+|every\s+)?month)?$")
+
+# "last day of the month", "first day of the month", "second to last day ...".
+NTH_DAY = re.compile(
+    rf"^(?:on\s+|the\s+|every\s+|each\s+)*(?:(second|next)\s+to\s+)?"
+    rf"({_ORDINAL_NAMES})\s+day\s+of\s+(?:the\s+|each\s+|every\s+)?month$")
+
+# "the 15th of the month", "on the 1st and 15th", "15th of every month". A bare
+# number is not enough: "every 3 weeks" has one too. Either the ordinal suffix
+# or an explicit month context has to be present.
+MONTH_DAYS = re.compile(
+    rf"^(?:on\s+|the\s+|every\s+|each\s+)*"
+    rf"((?:\d{{1,2}}(?:st|nd|rd|th)?\s*(?:and\s+|,\s*)?)+)"
+    rf"(?:day\s+)?(?:of\s+(?:the\s+|each\s+|every\s+)?month)?$")
+
+# "every March and September", "in March and September".
+MONTH_LIST = re.compile(
+    rf"^(?:in\s+|on\s+|every\s+|each\s+)*"
+    rf"((?:(?:{_MONTH_NAMES})\s*(?:and\s+|,\s*)?)+)$")
+
+
+def monthly_pattern(said: str) -> str | None:
+    """A month-shaped recurrence said in words, or None to try the other rules.
+
+    Returns tklr grammar. Every branch pins the frequency to `m` (or `y` for a
+    list of months) because that is what makes the position mean anything: `&d`
+    and `&s` are read relative to the frequency's period, and a day-frequency
+    with a set position is not the same request.
     """
+    low = " ".join(said.lower().replace("-", " ").split())
+
+    m = NTH_WEEKDAY.fullmatch(low)
+    if m:
+        return f"m &w {RECURRENCE_DAYS[m.group(2)]} &s {ORDINALS[m.group(1)]}"
+
+    m = NTH_DAY.fullmatch(low)
+    if m:
+        nth = ORDINALS[m.group(2)]
+        if m.group(1):                      # "second to last" / "next to last"
+            nth = -2 if nth == -1 else nth
+        return f"m &d {nth}"
+
+    m = MONTH_DAYS.fullmatch(low)
+    if m and re.search(r"(st|nd|rd|th)\b|month", low):
+        days = [int(d) for d in re.findall(r"\d{1,2}", m.group(1))]
+        if days and all(1 <= d <= 31 for d in days):
+            return f"m &d {','.join(str(d) for d in days)}"
+
+    m = MONTH_LIST.fullmatch(low)
+    if m:
+        months = [MONTH_WORDS[w] for w in re.findall(_MONTH_NAMES, m.group(1))]
+        if months:
+            seen = sorted(set(months))
+            return f"y &m {','.join(str(x) for x in seen)}"
+
+    return None
+
+
+# Clauses that can trail any recurrence. Each is lifted off the phrase before
+# the days and the frequency are read, so "weekly until December 25" does not
+# try to read "december" as a frequency word.
+UNTIL_CLAUSE = re.compile(r"\b(?:until|till|thru|through|ending)\s+(.+)$")
+# "4 times" is how many repetitions in total; "3 times A DAY" is how many within
+# each one, which is the `at ...` clause's business. Without the lookahead the
+# second reads as the first, and "3 times a day at 8am and 6pm" quietly grows a
+# stop-after-three.
+COUNT_CLAUSE = re.compile(r"\b(\d+)\s+times?\b(?!\s+(?:a|per|each)\s+day)")
+AT_TIMES_CLAUSE = re.compile(
+    r"\bat\s+((?:(?:\d{1,2}(?::\d{2})?\s*(?:am|pm|a|p)?|noon|midday|midnight)"
+    r"(?:\s*(?:,|and)\s*)?)+)$")
+EASTER_CLAUSE = re.compile(
+    r"^(?:every\s+|each\s+)?(?:(\d+)\s+days?\s+(before|after)\s+)?easter$")
+GOOD_FRIDAY = re.compile(r"^(?:every\s+|each\s+)?good\s+friday$")
+
+
+def until_date(text: str, now: datetime) -> str:
+    """`until <something>` as a date tklr accepts, or a contextual refusal.
+
+    `resolve_when` does the reading, but its own refusal talks about `--when`,
+    which is the wrong flag to name when the user is inside `--repeat`. So its
+    output is swallowed and re-said here.
+    """
+    import contextlib
+    import io
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            resolved, _ = resolve_when(text, now)
+    except SystemExit:
+        die(f"--repeat could not read {text!r} as the date to stop on",
+            "Say it as a date: 'until December 25', 'until 2026-12-25'.")
+    return resolved.split()[0]
+
+
+def repeat_hours(text: str) -> list[int] | None:
+    """Whole hours from an `at 9am and 5pm` clause, or None if it is not that.
+
+    Returns None for a single time, because one hour inside `--repeat` is
+    almost always the start time in the wrong flag, and `--when` already holds
+    it. Two or more can only mean several times within the day.
+
+    Minutes are refused rather than dropped. tklr stores these as BYHOUR and
+    BYMINUTE, which combine as a CROSS PRODUCT: hours 9 and 17 with minutes 0
+    and 30 is four times a day, not two. So "9am and 5:30pm" is not one
+    reminder in any syntax, and saying so is better than filing four alerts.
+    """
+    hours, minutes = [], []
+    for token in re.split(r"\s*(?:,|and)\s*", text.strip()):
+        if not token:
+            continue
+        hm = parse_time(token)
+        if hm is None:
+            return None
+        hours.append(hm[0])
+        minutes.append(hm[1])
+    if len(hours) < 2:
+        return None
+    if any(m for m in minutes):
+        die("--repeat can only take whole hours for several times a day",
+            f"Read {text.strip()!r} as {len(hours)} times, but tklr combines "
+            "hours and minutes as every pairing, so a half hour on one of them "
+            "lands on all of them.",
+            "Use whole hours, or file one reminder per time.")
+    return sorted(set(hours))
+
+
+def tklr_recurrence(value: str, now: datetime | None = None) -> str:
+    """tklr's `@r` grammar, from what a person would say. Words only.
+
+    tklr's own grammar is REFUSED rather than passed through. It is three
+    characters at a time with no redundancy, the model has been measured
+    getting it wrong all week (`Tu Th`, `w & Tu`, `w TU`, ten round trips and a
+    false claim that recurrence was unsupported), and a syntax the model can
+    reach for is a syntax it will eventually reach for wrongly. Anything with
+    no words here is not supported by this skill, and says so.
+    """
+    now = now or datetime.now()
     said = " ".join(value.split())
     if TKLR_RECURRENCE.fullmatch(said):
-        return said
+        die(f"--repeat {value!r} is tklr's own syntax, which this takes no more",
+            "Say it in words instead:",
+            "  'daily'  'weekly'  'monthly'  'yearly'",
+            "  'weekdays'  'weekends'  'Tuesdays and Thursdays'",
+            "  'every other Tuesday'  'every 3 weeks'",
+            "  'last day of the month'  'the 15th of the month'",
+            "  'first Monday of the month'  'every March and September'",
+            "  'weekly 4 times'  'weekly until December 25'",
+            "  'twice a day at 9am and 5pm'  'Easter'")
 
-    words = [w for w in re.split(r"[\s,;/]+|\band\b|&", said.lower()) if w]
+    low = " ".join(said.lower().replace("-", " ").split())
+
+    # --- trailing clauses, lifted off before anything else is read
+    until = count = None
+    hours: list[int] | None = None
+
+    m = UNTIL_CLAUSE.search(low)
+    if m:
+        until = until_date(m.group(1), now)
+        low = low[:m.start()].strip()
+
+    m = COUNT_CLAUSE.search(low)
+    if m:
+        count = int(m.group(1))
+        if count < 1:
+            die("--repeat needs a count of at least 1")
+        low = (low[:m.start()] + " " + low[m.end():]).strip()
+
+    m = AT_TIMES_CLAUSE.search(low)
+    if m:
+        hours = repeat_hours(m.group(1))
+        if hours:
+            low = low[:m.start()].strip()
+
+    # "twice a day", "three times a day" -- these count times WITHIN a day, which
+    # the `at ...` clause above has already turned into hours, so the phrase is
+    # dropped whole. Dropped whole matters: leaving "three" behind sends it to
+    # the word loop, which cannot read it and refuses a value it had understood.
+    low = re.sub(r"\b(?:once|twice|thrice"
+                 r"|(?:one|two|three|four|five|six|\d+)\s+times?)"
+                 r"\s+(?:a|per|each)\s+day\b", "", low).strip()
+    low = re.sub(r"\b(?:a|per|each)\s+day\b", "", low).strip()
+
+    # --- Easter, the one recurrence with no fixed date to fall back on
+    m = GOOD_FRIDAY.fullmatch(low)
+    if m:
+        return finish_recurrence(value, "y &E -2", None, count, until)
+    m = EASTER_CLAUSE.fullmatch(low)
+    if m:
+        offset = int(m.group(1) or 0)
+        if m.group(2) == "before":
+            offset = -offset
+        return finish_recurrence(value, f"y &E {offset}", None, count, until)
+
+    # Month-shaped patterns next: they are whole phrases, and the day and
+    # frequency rules below read a value word by word, where "first Monday of
+    # the month" would come apart into a weekday and some noise.
+    monthly = monthly_pattern(low)
+    if monthly:
+        return finish_recurrence(value, monthly, hours, count, until)
+
+    words = [w for w in re.split(r"[\s,;/]+|\band\b|&", low) if w]
+    if not words and (hours or count or until):
+        # "twice a day at 9am and 5pm" says the frequency by implication.
+        return finish_recurrence(value, "d", hours, count, until)
     if not words:
         die("--repeat needs a value")
 
@@ -597,10 +819,13 @@ def tklr_recurrence(value: str) -> str:
         else:
             die(f"--repeat {value!r} is not something I can turn into a "
                 f"recurrence",
-                "Give the days ('Tuesdays and Thursdays', 'weekdays'), a "
-                "frequency ('daily', 'every 3 weeks', 'every other Tuesday'), "
-                "or tklr's own grammar (a frequency character y m w d h n, "
-                "then optional & options).")
+                "Say the days ('Tuesdays and Thursdays', 'weekdays'), how often "
+                "('daily', 'every 3 weeks', 'every other Tuesday'), a position "
+                "in the month ('last day of the month', 'first Monday of the "
+                "month'), or when to stop ('weekly 4 times', 'weekly until "
+                "December 25').",
+                "If none of those says it, this skill does not support that "
+                "recurrence yet. Say so rather than composing tklr tokens.")
 
     ordered = [d for d in ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
                if d in days]
@@ -618,13 +843,129 @@ def tklr_recurrence(value: str) -> str:
         built += f" &w {','.join(ordered)}"
     elif frequency:
         built = frequency + (f" &i {interval}" if interval and interval > 1 else "")
+    elif hours or count or until:
+        built = "d"
     else:
         die(f"--repeat {value!r} names no days and no frequency",
             "Say the days ('Tuesdays and Thursdays') or how often ('daily', "
             "'every 3 weeks').")
 
-    if built != said:
-        warnings.append(f"read --repeat {value!r} as tklr's {built!r}")
+    return finish_recurrence(value, built, hours, count, until)
+
+
+FREQ_IN_WORDS = {"y": ("year", "yearly"), "m": ("month", "monthly"),
+                 "w": ("week", "weekly"), "d": ("day", "daily"),
+                 "h": ("hour", "hourly"), "n": ("minute", "every minute")}
+DAY_IN_WORDS = {"MO": "Monday", "TU": "Tuesday", "WE": "Wednesday",
+                "TH": "Thursday", "FR": "Friday", "SA": "Saturday",
+                "SU": "Sunday"}
+NTH_IN_WORDS = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth",
+                -1: "last", -2: "second to last"}
+# Built from the canonical list, not by filtering MONTH_WORDS: "sept" is four
+# characters and so survived a `len > 3` filter, and being a later key it won
+# over "september" -- so September rendered back as "Sept".
+MONTH_IN_WORDS = {i: name for i, name in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July", "August",
+     "September", "October", "November", "December"], start=1)}
+
+# The two named sets, so a five-day list reads the way it was asked for.
+DAY_SETS = {"MO,TU,WE,TH,FR": "every weekday", "SA,SU": "every weekend day"}
+
+
+def join_words(items: list[str]) -> str:
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def ordinal(n: int) -> str:
+    if n < 0:
+        return NTH_IN_WORDS.get(n, f"{-n} from the end")
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def recurrence_in_words(built: str) -> str:
+    """A tklr `@r` value said back in English.
+
+    Every place the wrapper used to print the token itself now prints this. The
+    token is what tklr stores, not something anyone should write or read: it was
+    printed on every successful call, which taught the agent the one syntax the
+    wrapper refuses, and the reference told it to quote that line back to the
+    user. Nobody wants to hear `d &w TU,TH`.
+    """
+    parts = built.split(" &")
+    freq = parts[0].strip()
+    opts = {}
+    for chunk in parts[1:]:
+        key, _, val = chunk.strip().partition(" ")
+        opts[key] = val.strip()
+
+    interval = int(opts.get("i", 1) or 1)
+    singular, plain = FREQ_IN_WORDS.get(freq, ("period", freq))
+    days = [DAY_IN_WORDS.get(d, d) for d in opts["w"].split(",")] if "w" in opts else []
+
+    if "E" in opts:
+        off = int(opts["E"])
+        if off == 0:
+            said = "every year on Easter"
+        else:
+            said = (f"every year {abs(off)} day{'s' if abs(off) != 1 else ''} "
+                    f"{'before' if off < 0 else 'after'} Easter")
+    elif "s" in opts and days:
+        said = (f"the {NTH_IN_WORDS.get(int(opts['s']), opts['s'])} "
+                f"{join_words(days)} of every month")
+    elif "d" in opts:
+        nums = [int(x) for x in opts["d"].split(",")]
+        if nums == [-1]:
+            said = "the last day of every month"
+        else:
+            said = f"the {join_words([ordinal(n) for n in nums])} of every month"
+    elif "m" in opts:
+        months = [MONTH_IN_WORDS.get(int(x), x) for x in opts["m"].split(",")]
+        said = f"every year in {join_words(months)}"
+    elif days and interval == 1 and opts.get("w") in DAY_SETS:
+        said = DAY_SETS[opts["w"]]
+    elif days:
+        said = ("every " if interval == 1
+                else "every other " if interval == 2
+                else f"every {ordinal(interval)} ") + join_words(days)
+    elif interval == 2:
+        said = f"every other {singular}"
+    elif interval > 1:
+        said = f"every {interval} {singular}s"
+    else:
+        said = plain
+
+    if "H" in opts:
+        clock = [f"{int(h):02d}:00" for h in opts["H"].split(",")]
+        said += f", at {join_words(clock)}"
+    if "M" in opts:
+        said += f", minute {opts['M']} of the hour"
+    if "c" in opts:
+        said += f", {opts['c']} times in all"
+    if "u" in opts:
+        said += f", until {opts['u']}"
+    if "W" in opts:
+        said += f", in week(s) {opts['W']} of the year"
+    return said
+
+
+def finish_recurrence(value: str, built: str, hours: list[int] | None,
+                      count: int | None, until: str | None) -> str:
+    """Attach the trailing clauses and say out loud what the value was read as.
+
+    Order follows tklr's own examples -- frequency, then `&` options -- and the
+    echo is unconditional now that no input is passed through untouched: every
+    value is a translation, so every value is worth confirming.
+    """
+    if hours:
+        built += f" &H {','.join(str(h) for h in hours)}"
+    if count:
+        built += f" &c {count}"
+    if until:
+        built += f" &u {until}"
+    warnings.append(f"read --repeat {value!r} as: {recurrence_in_words(built)}")
     return built
 
 
@@ -675,7 +1016,7 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
         parts.append(f"@e {args.duration.strip()}")
 
     if args.repeat:
-        parts.append(f"@r {tklr_recurrence(args.repeat)}")
+        parts.append(f"@r {tklr_recurrence(args.repeat, now)}")
 
     if args.target:
         if not re.fullmatch(r"\d+/\d+[wdhms]", args.target.strip()):
@@ -900,6 +1241,143 @@ def show_output(proc: subprocess.CompletedProcess[str]) -> None:
     """Print tklr output minus its internal chatter."""
     for line in clean_lines(proc):
         print(line)
+
+
+
+# --- entries, said in words -------------------------------------------------
+#
+# NOTHING this wrapper prints shows tklr's own syntax. Not the entry it just
+# wrote, not the one it is about to change, not the one it refused. The agent
+# writes named flags and reads English; the compact form is storage, and every
+# week of driving this skill has produced another failure that started with the
+# model copying a token it had been shown. `tklr` itself is still there for a
+# human who wants to look.
+
+ENTRY_TOKENS = re.compile(r"@([a-zA-Z])\s+(.*?)(?=\s+@[a-zA-Z]\s|$)")
+ENTRY_START = re.compile(r"^([*~^%!\-?])\s+(.*)$")
+
+# Label, and how much detail is worth a line of its own.
+TOKEN_LABELS = {
+    "s": "when", "e": "lasts", "r": "repeats", "a": "alerts", "b": "for",
+    "d": "note", "l": "location", "g": "link", "p": "priority",
+    "n": "warn from", "o": "then again after", "w": "travel", "t": "target",
+    "u": "counts toward", "+": "extra dates", "-": "skipped dates",
+}
+PERIOD_WORDS = {"w": "week", "d": "day", "h": "hour", "m": "minute", "s": "second"}
+
+
+def period_in_words(text: str) -> str:
+    """`1h30m` as `1 hour 30 minutes`; anything unrecognised comes back as is."""
+    pieces = re.findall(r"(\d+)([wdhms])", text.strip())
+    if not pieces:
+        return text.strip()
+    said = []
+    for count, unit in pieces:
+        word = PERIOD_WORDS.get(unit, unit)
+        said.append(f"{count} {word}" + ("s" if count != "1" else ""))
+    return " ".join(said)
+
+
+def alerts_in_words(value: str) -> str:
+    """`45m, 1d: r, e` as `45 minutes and 1 day before, on channels r and e`."""
+    offsets, _, letters = value.partition(":")
+    said = join_words([period_in_words(o) for o in offsets.split(",") if o.strip()])
+    chans = join_words([l.strip() for l in letters.split(",") if l.strip()])
+    if not chans:
+        return f"{said} before, but NO channel, so this notifies nobody"
+    plural = "s" if "," in letters or " and " in chans else ""
+    return f"{said} before, on channel{plural} {chans}"
+
+
+def entry_in_words(entry: str) -> list[str]:
+    """A stored entry as labelled English lines, with no tklr syntax in them.
+
+    Unrecognised fields are reported as present rather than dropped: an agent
+    that confidently describes a reminder while silently omitting a field it did
+    not know is worse than one that says something is there.
+    """
+    head = ENTRY_START.match(entry.strip())
+    if not head:
+        return [entry.strip()]
+    kind = TYPENAME.get(head.group(1), "reminder")
+    rest = head.group(2)
+    first = rest.find(" @")
+    subject = (rest if first < 0 else rest[:first]).strip()
+    lines = [f"{kind}: {subject}"]
+    unknown = 0
+    for key, value in ENTRY_TOKENS.findall(rest):
+        value = value.strip()
+        label = TOKEN_LABELS.get(key)
+        if label is None:
+            unknown += 1
+            continue
+        if key == "r":
+            value = recurrence_in_words(value)
+        elif key == "a":
+            value = alerts_in_words(value)
+        elif key in ("e", "n", "o"):
+            value = period_in_words(value)
+        elif key == "w":
+            legs = [period_in_words(x) for x in value.split(",")]
+            value = f"{legs[0]} before" + (f" and {legs[1]} after" if len(legs) > 1 else "")
+        elif key == "b":
+            value = join_words([p.split("/")[0] for p in value.split(",")])
+        elif key == "p":
+            value = f"{value} (1 is highest)"
+        lines.append(f"  {label}: {value}")
+    if unknown:
+        lines.append(f"  ({unknown} further stored field(s) this wrapper does "
+                     f"not describe; inspect with tklr itself if it matters)")
+    return lines
+
+
+# tklr talks about its own tokens and itemtype characters when it refuses
+# something. Relayed verbatim -- which is what `detail[:6]` used to do -- that
+# is the densest syntax the agent ever sees, arriving at the one moment it is
+# hunting for a different spelling to try. Said in this wrapper's own flag names
+# it becomes actionable instead: "priority is not supported on an event".
+TOKEN_FLAGS = {
+    "s": "--when", "e": "--duration", "r": "--repeat", "a": "--alert/--via",
+    "b": "--for", "d": "--note", "l": "--location", "g": "--link",
+    "p": "--priority", "n": "--notice", "o": "--offset", "w": "--travel",
+    "t": "--target", "u": "--use",
+}
+
+
+def scrub_tklr_text(line: str) -> str:
+    """A message from tklr with its syntax translated out of it."""
+    # A quoted entry inside the message: the caller has already said what the
+    # entry was, in words, so the copy here is only a chance to imitate it.
+    line = re.sub(r"'[*~^%!?-] [^']*@[^']*'", "the entry above", line)
+    line = re.sub(r"@([a-zA-Z])\b",
+                  lambda m: TOKEN_FLAGS.get(m.group(1), f"field {m.group(1)}"),
+                  line)
+    def a_kind(char: str) -> str:
+        kind = TYPENAME.get(char, "reminder")
+        return f"{'an' if kind[0] in 'aeiou' else 'a'} {kind}"
+
+    # Whole phrase first, so "in type '*' reminders" does not become the
+    # "in a event reminders" that a bare substitution leaves behind.
+    line = re.sub(r"in type '([*~^%!?-])' reminders",
+                  lambda m: f"on {a_kind(m.group(1))}", line)
+    line = re.sub(r"type '([*~^%!?-])'", lambda m: a_kind(m.group(1)), line)
+    return line
+
+
+def scrub_entry(line: str) -> list[str]:
+    """Any line carrying a stored entry, rewritten as words. Others unchanged.
+
+    A prefix is kept and the entry beneath it indented, so `from:` and `to:` on
+    an edit still read as a before and an after.
+    """
+    found = re.search(r"(^\s*|:\s*)([*~^%!\-?]\s+\S.*)$", line)
+    if not found or "@" not in line:
+        return [line]
+    prefix = line[:found.start(2)].rstrip()
+    said = entry_in_words(found.group(2))
+    if not prefix:
+        return said
+    return [prefix] + [f"  {l}" for l in said]
 
 
 # --- alert times on a list -------------------------------------------------
@@ -1127,6 +1605,26 @@ def list_header(today: date, first: date | None, span: int) -> str:
     return f"Showing {spelled_date(first)}."
 
 
+# tklr marks each row with its itemtype character -- `*` event, `~` task, `-`
+# jot. One character carrying meaning is the same problem as the tokens, in
+# miniature: it is compact, it is guessable, and an agent that has read a
+# hundred rows beginning `*` has learnt a spelling this wrapper will refuse.
+# Rows say the type instead.
+ROW_SIGIL = re.compile(r"^(\s*)([*~^%!\-?])(\s+)(?=\S)")
+
+
+def rows_say_the_type(lines: list[str]) -> list[str]:
+    said = []
+    for line in lines:
+        hit = ROW_SIGIL.match(line)
+        if hit and not line.lstrip().startswith("--"):
+            kind = TYPENAME.get(hit.group(2), "reminder")
+            said.append(f"{hit.group(1)}{kind}:{hit.group(3)}{line[hit.end():]}")
+        else:
+            said.append(line)
+    return said
+
+
 def cmd_list(args, home: Path, now: datetime) -> int:
     today = now.date()
     span = 1
@@ -1152,13 +1650,36 @@ def cmd_list(args, home: Path, now: datetime) -> int:
         listed = run_tklr(home, "days", "--start", start, "--end", str(span),
                           "--plain", "--ids", "--width", FULL_WIDTH)
     print(list_header(today, first, span))
-    for line in annotate_alerts(clean_lines(listed), home, now):
+    for line in rows_say_the_type(annotate_alerts(clean_lines(listed), home, now)):
         print(line)
     return 0
 
 
 def cmd_show(args, home: Path, now: datetime) -> int:
-    show_output(run_tklr(home, "details", str(args.id)))
+    """Everything about one reminder, in words.
+
+    Built from the joined entry rather than by filtering `tklr details` line by
+    line: `details` wraps a long entry over several lines, so the continuations
+    arrive as bare `@g ...` fragments with no itemtype to recognise them by, and
+    a per-line filter would pass those straight through. Its iCal `rruleset`
+    block and created/modified footer are dropped -- iCal is one more compact
+    syntax, and the timestamps answer nothing anyone asks.
+    """
+    entry = record_entry(home, args.id)
+    if not entry:
+        die(f"no reminder with id {args.id}",
+            f"Find the right id with: {sys.argv[0]} find <text>")
+    for line in entry_in_words(entry):
+        print(line)
+    print(f"  id: {args.id}")
+
+    # The question behind "tell me about that one" is usually when it next
+    # happens, which the entry states only as a start plus a rule.
+    nearest = next_occurrences(home, now).get(args.id)
+    if nearest:
+        when, ahead = nearest
+        print(f"  next occurrence: {when:%A, %B %-d, %Y at %H:%M}"
+              f"{'' if ahead else ' (in the past; nothing is left)'}")
     return 0
 
 
@@ -1228,9 +1749,15 @@ def cmd_find(args, home: Path, now: datetime) -> int:
     else:
         found = run_tklr(home, "find", args.text)
     print(f"Today is {spelled_date(now.date())}.")
-    for line in annotate_found(clean_lines(found), home, now):
+    for line in rows_say_the_type(annotate_found(clean_lines(found), home, now)):
         print(line)
     return 0
+
+
+def free_rows(proc: subprocess.CompletedProcess[str]) -> None:
+    """`free`'s day view, with each row saying its type instead of a sigil."""
+    for line in rows_say_the_type(clean_lines(proc)):
+        print(line)
 
 
 def cmd_free(args, home: Path, now: datetime) -> int:
@@ -1238,7 +1765,7 @@ def cmd_free(args, home: Path, now: datetime) -> int:
     day = when.split()[0]
     print(f"Everything on {day} — compare against it, and mind durations "
           f"and travel time:")
-    show_output(run_tklr(home, "days", "--start", day, "--end", "1",
+    free_rows(run_tklr(home, "days", "--start", day, "--end", "1",
                          "--plain", "--ids", "--width", FULL_WIDTH))
     return 0
 
@@ -1264,7 +1791,10 @@ def delegate(script: str, argv: list[str], home: Path) -> int:
         for line in (stream or "").splitlines():
             if "No data to aggregate" in line or "No event DateTimes entries" in line:
                 continue
-            print(line.rstrip(), file=sink)
+            # The helpers print the entry they are about to write or remove.
+            # That is the compact form, so it is said in words here instead.
+            for said in scrub_entry(line.rstrip()):
+                print(scrub_tklr_text(said), file=sink)
     return proc.returncode
 
 
@@ -1515,7 +2045,7 @@ def cmd_edit(args, home: Path, now: datetime) -> int:
         sets.append(f"@e {args.duration.strip()}")
 
     if args.repeat:
-        sets.append(f"@r {tklr_recurrence(args.repeat)}")
+        sets.append(f"@r {tklr_recurrence(args.repeat, now)}")
 
     if args.use:
         # The type comes off the stored entry rather than a flag: this is the
@@ -1843,12 +2373,15 @@ def move_occurrence(home: Path, rid: int, entry: str, instance: str,
     chk = run_tklr(home, "check", "--", moved)
     if "valid" not in (chk.stdout or "").lower():
         die("could not build the moved reminder",
-            f"composed: {moved}",
+            "what it would have been:",
+            *[f"  {l}" for l in entry_in_words(moved)],
             *[ln for ln in (chk.stdout or "").splitlines()[:4]])
 
     if dry_run:
         print(f"WOULD exclude {instance} from id {rid}")
-        print(f"WOULD create:  {moved}")
+        print("WOULD create:")
+        for said in entry_in_words(moved):
+            print(f"  {said}")
         print("  (nothing was changed)")
         return 0
 
@@ -1864,7 +2397,8 @@ def move_occurrence(home: Path, rid: int, entry: str, instance: str,
     add = run_tklr(home, "add", "--", moved)
     if "Added 1 entry" not in ((add.stdout or "") + (add.stderr or "")):
         die("the occurrence was excluded but the moved reminder was NOT created",
-            f"composed: {moved}",
+            "what it would have been:",
+            *[f"  {l}" for l in entry_in_words(moved)],
             f"id {rid} no longer has an occurrence at {instance}; add the "
             "replacement by hand or the user simply loses it.")
 
@@ -2995,10 +3529,15 @@ def cmd_add(args, home: Path, now: datetime) -> int:
     if "Entry is valid" not in (chk.stdout or ""):
         detail = [l.strip() for l in (chk.stdout or "").splitlines()
                   if l.strip() and "aggregate" not in l and "DateTimes" not in l]
-        die("that reminder could not be created", f"composed: {entry}", *detail[:6])
+        die("that reminder could not be created",
+            "what it would have been:",
+            *[f"  {l}" for l in entry_in_words(entry)],
+            *[scrub_tklr_text(d) for d in detail[:6]])
 
     if args.dry_run:
-        print(f"WOULD create: {entry}")
+        print("WOULD create:")
+        for said in entry_in_words(entry):
+            print(f"  {said}")
         report_alert_times(entry, resolved, now)
         print("  (nothing was written)")
         return 0
@@ -3008,7 +3547,10 @@ def cmd_add(args, home: Path, now: datetime) -> int:
     if "Added 1 entry" not in out:
         detail = [l.rstrip() for l in out.splitlines()
                   if l.strip() and "aggregate" not in l and "DateTimes" not in l]
-        die("the reminder was not created", f"composed: {entry}", *detail[:8])
+        die("the reminder was not created",
+            "what it would have been:",
+            *[f"  {l}" for l in entry_in_words(entry)],
+            *[scrub_tklr_text(d) for d in detail[:8]])
 
     heal = POLLER
     heal_failed = ""
@@ -3035,7 +3577,9 @@ def cmd_add(args, home: Path, now: datetime) -> int:
         die(f"it was stored as a DRAFT (id {row[0]}) and will never fire",
             f"Inspect with: {sys.argv[0]} show {row[0]}")
 
-    print(f"created id {row[0] if row else '?'}: {entry}")
+    print(f"created id {row[0] if row else '?'}:")
+    for said in entry_in_words(entry):
+        print(f"  {said}")
     report_alert_times(entry, resolved, now)
     if row:
         verify_scheduled(home, row[0], entry, resolved, now, heal_failed)
@@ -3188,8 +3732,17 @@ def main() -> int:
             "    --repeat \"weekdays\"               Mon to Fri\n"
             "    --repeat \"daily\"                  every day\n"
             "    --repeat \"every other Tuesday\"    fortnightly\n"
-            "  tklr's own grammar still works unchanged, and covers months,\n"
-            "  month days and Easter: \"m &d -1\" is the last day of the month.\n"
+            "    --repeat \"last day of the month\"  also \"first Monday of\n"
+            "                                      the month\", \"the 15th of\n"
+            "                                      the month\"\n"
+            "    --repeat \"weekly 4 times\"         stop after four\n"
+            "    --repeat \"weekly until December 25\"\n"
+            "    --repeat \"twice a day at 9am and 5pm\"\n"
+            "    --repeat \"Easter\" / \"Good Friday\"\n"
+            "  Write day and month names out in full. tklr's own recurrence\n"
+            "  syntax is REFUSED, not accepted: it will tell you to say it in\n"
+            "  words. Week numbers, and several times a day at other than\n"
+            "  whole hours, are not supported -- say so.\n"
             "  The pattern goes in --repeat and ONLY the first occurrence in\n"
             "  --when: \"every Sunday 8pm\" is --when \"sunday 8pm\" --repeat\n"
             "  \"every Sunday\". --when refuses a pattern and prints that split.\n"
@@ -3208,7 +3761,7 @@ def main() -> int:
             "      --duration 1h --for alex --alert 1d,1h --via r\n"
             "  %(prog)s --type task --subject \"Buy milk\" --for alex\n"
             "  %(prog)s --type event --subject \"Standup\" --when \"tomorrow 9am\" \\\n"
-            "      --repeat \"d &w MO,TU,WE,TH,FR\" --for alex,jordan --alert 10m --via r\n"))
+            "      --repeat \"weekdays\" --for alex,jordan --alert 10m --via r\n"))
     a.add_argument("--type", choices=sorted(ITEMTYPE),
                    help="event (has a time), task (to do), project (tasks with "
                         "steps), goal (n per period), note (reference), jot "
@@ -3228,7 +3781,9 @@ def main() -> int:
     a.add_argument("--timezone", help="e.g. America/Chicago; default is local")
     a.add_argument("--offset", help="for tasks: reschedule this long after completion, e.g. 3d")
     a.add_argument("--travel", help="travel time, e.g. 30m or 30m,15m (before,after)")
-    a.add_argument("--repeat", help="tklr recurrence, e.g. 'd' or 'd &w MO,TU,WE,TH,FR'")
+    a.add_argument("--repeat", help="how often, in words: 'weekdays', "
+                   "'Tuesdays and Thursdays', 'last day of the month', "
+                   "'weekly until December 25'")
     a.add_argument("--target", help="for goals: completions per period, e.g. 3/1w")
     a.add_argument("--step", action="append",
                    help="a project step; repeat the flag for each one")
@@ -3298,7 +3853,8 @@ def main() -> int:
     e.add_argument("--timezone", help="only with --when")
     e.add_argument("--offset", help="for tasks: reschedule this long after completion")
     e.add_argument("--travel", help="travel time, e.g. 30m or 30m,15m")
-    e.add_argument("--repeat", help="tklr recurrence, e.g. 'd &w MO,TU,WE,TH,FR'")
+    e.add_argument("--repeat", help="how often, in words: 'weekdays', "
+                   "'last day of the month' — replaces the old pattern")
     e.add_argument("--clear", help="remove fields entirely, comma-separated: "
                                    + ", ".join(sorted(set(CLEARABLE))))
     e.add_argument("--dry-run", action="store_true",

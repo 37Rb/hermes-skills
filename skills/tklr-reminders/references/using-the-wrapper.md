@@ -160,7 +160,7 @@ to take on trust.
 | `--alert` | offsets **before** the start: `1d,1h,15m` |
 | `--via` | channel letters: `r`, or `r,e` |
 | `--note` `--location` `--priority` `--notice` | extra detail, place, 1–5, early warning |
-| `--repeat` | tklr recurrence — see the table below |
+| `--repeat` | how often, in words: `"weekdays"`, `"last day of the month"` — see below |
 | `--link` | a url or file path, e.g. a meeting link |
 | `--offset` | for tasks: reschedule this long **after completion**, e.g. `3d` |
 | `--travel` | travel held either side: `30m` or `30m,15m` (before,after) |
@@ -179,48 +179,68 @@ There is no escape hatch for entries the flags cannot express. If a request
 needs something not listed above, say so rather than composing tklr tokens by
 hand.
 
-### `--repeat`: say the days
+### `--repeat`: say how often, in words
 
-**Say the days or how often, in words.** All of these work, and each one
-prints the tklr recurrence it was read as, so you can quote the right thing
-back to the user:
+**This flag takes words. tklr's own recurrence syntax is refused.** Every value
+is translated and the translation is printed, so quote that back rather than
+what you typed:
 
 ```bash
---repeat "Tuesdays and Thursdays"   read as: d &w TU,TH
---repeat "tue,thu"                  read as: d &w TU,TH
---repeat "weekdays"                 read as: d &w MO,TU,WE,TH,FR
---repeat "daily"                    read as: d
---repeat "every other Tuesday"      read as: w &i 2 &w TU
---repeat "every 3 weeks"            read as: w &i 3
+--repeat "daily"          --repeat "weekly"          --repeat "monthly"
+--repeat "yearly"         --repeat "weekdays"        --repeat "weekends"
+--repeat "Tuesdays and Thursdays"
+--repeat "every other Tuesday"            --repeat "every 3 weeks"
+--repeat "last day of the month"          --repeat "first day of the month"
+--repeat "second to last day of the month"
+--repeat "the 15th of the month"          --repeat "the 1st and 15th of the month"
+--repeat "first Monday of the month"      --repeat "last Friday of the month"
+--repeat "every March and September"
+--repeat "weekly 4 times"                 --repeat "weekly until December 25"
+--repeat "twice a day at 9am and 5pm"
+--repeat "Easter"                         --repeat "Good Friday"
 ```
 
-Anything it cannot read it refuses, naming what it accepts. It never guesses,
+It prints back what it understood, in words, so that is the line to quote:
+
+```
+  note: read --repeat 'Tues and Thurs' as: every Tuesday and Thursday
+  note: read --repeat 'weekly 4 times' as: weekly, 4 times in all
+```
+
+
+These combine: `"weekdays until December 25"`, `"Tuesdays and Thursdays 6
+times"`, `"three times a day at 8am, noon and 6pm"`.
+
+**Write day and month names out in full.** Abbreviations are accepted and
+echoed, so `tue,thu` and `sept` do work, but a full name is the one spelling
+that is unambiguous in every flag, and `we` is a word as well as a Wednesday.
+
+**tklr's own recurrence syntax — a single frequency letter, optionally followed
+by `&` options — is an error here, not a shortcut.** The wrapper recognises it
+only so it can tell you to say it in words. That syntax is deliberately not
+spelled out anywhere in this skill: it has no redundancy, it is what the agent
+has been measured getting wrong all week, and an example of it is something to
+copy. If you find it in a record's stored tokens, that is tklr's storage format,
+never an input.
+
+Anything it cannot read it refuses, and names what it accepts. It never guesses,
 so a refusal means ask or rephrase, not try another spelling.
 
-The rest of this section is tklr's own grammar. It still passes through
-untouched, so every example below is valid, and it is what you need for the
-cases words do not cover: months, month days, Easter. It takes a frequency
-character, then optional `&` options:
+**Two things this skill does not support.** Say so plainly rather than reaching
+for tklr tokens: **week numbers** ("week 26 of the year"), and **several times a
+day at times that are not whole hours**. The second is not a gap in the wording:
+tklr stores those as hours and minutes that combine as every pairing, so 9am and
+5:30pm would also fire at 9:30 and 5pm. That is two reminders, not one.
 
-| Frequency | Meaning |
-|-----------|---------|
-| `y` `m` `w` `d` `h` `n` | year, month, week, day, hour, minute |
-
-| Option | Meaning | Example |
-|--------|---------|---------|
-| `&i` | interval | `w &i 2` = every 2 weeks |
-| `&w` | weekdays `SU`–`SA` | `d &w MO,TU,WE,TH,FR` |
-| `&m` | months 1–12 | `y &m 3,9` |
-| `&d` | month days (negative counts from the end) | `m &d -1` = last day |
-| `&H` `&M` | hours / minutes | `d &H 9,17` |
-| `&E` | days relative to Easter | `y &E 0` |
-
-```bash
---repeat "d"                      every day
---repeat "d &w MO,TU,WE,TH,FR"    every weekday
---repeat "w &i 2 &w TU"           every other Tuesday
---repeat "m &d -1"                last day of each month
-```
+**A first occurrence more than about three months out reports "NOT on the
+schedule", and the record is fine.** tklr materialises occurrences inside a
+generation horizon, and the check after a write cannot yet tell "the recurrence
+is wrong" from "the first occurrence is past the horizon". Measured 2026-08-11:
+a start on 2026-11-01 verified, 2026-12-01 did not, with the same `monthly`
+repeat. `"Easter"` and `"Good Friday"` land here too, since the next one is in
+April. Confirm with `show <id>` rather than repeating the write or running
+`--heal`, and tell the user it is scheduled further out than tklr has generated
+yet.
 
 ### What the user says → what you run
 
@@ -230,10 +250,10 @@ All verified against tklr 1.0.43. `R` is `scripts/tklr_agent_wrapper.py`.
 |---------|---------|
 | "Dentist Friday at 3, remind me a day and an hour before" | `--type event --subject Dentist --when "friday 3pm" --duration 1h --for alex --alert 1d,1h --via r` |
 | "Coffee with Sam tomorrow 11:30" | `--type event --subject "Coffee with Sam" --when "tomorrow 11:30" --duration 45m --for alex --alert 15m --via r` |
-| "Standup every weekday at 9" | `--type event --subject Standup --when "2026-08-03 9am" --duration 30m --repeat "d &w MO,TU,WE,TH,FR" --for alex --alert 10m --via r` |
-| "Pay the mortgage on the 1st every month" | `--type task --subject "Pay mortgage" --when 2026-08-01 --repeat "m &i 1" --priority 1 --for alex --alert 1d --via r,e` |
+| "Standup every weekday at 9" | `--type event --subject Standup --when "2026-08-03 9am" --duration 30m --repeat "weekdays" --for alex --alert 10m --via r` |
+| "Pay the mortgage on the 1st every month" | `--type task --subject "Pay mortgage" --when 2026-08-01 --repeat "monthly" --priority 1 --for alex --alert 1d --via r,e` |
 | "Our anniversary is Aug 15, remind us both a week ahead" | `--type event --subject Anniversary --when "aug 15" --repeat y --for alex,jordan --alert 1w,1d --via r,a` |
-| "1:1 with Dana every other Tuesday at 10" | `--type event --subject "1:1 with Dana" --when "2026-08-04 10am" --duration 30m --repeat "w &i 2 &w TU" --for alex --alert 10m --via r` |
+| "1:1 with Dana every other Tuesday at 10" | `--type event --subject "1:1 with Dana" --when "2026-08-04 10am" --duration 30m --repeat "every other Tuesday" --for alex --alert 10m --via r` |
 | "Jordan has swimming Tuesdays and Thursdays at 5:30, remind me 45 minutes before" | `--type event --subject "Jordan swimming" --when "2026-08-11 5:30pm" --duration 1h --repeat "Tuesdays and Thursdays" --for jordan --alert 45m --via r` |
 | "Remember to buy milk" | `--type task --subject "Buy milk" --for alex` |
 | "Renew my passport by Sept 1, start warning me a month out" | `--type task --subject "Renew passport" --when 2026-09-01 --priority 1 --notice 30d --for alex --alert 1w --via r` |

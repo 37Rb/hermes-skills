@@ -211,8 +211,6 @@ Do this now, because everything below uses `/tklr`. The long name never stops wo
 
 **Why it matters.** A bare "what's on my to-do list?" with no `/tklr` in front of it may never reach the skill. 
 
-**Name it on every message, not just the first one.** A follow-up is a separate message, and an unnamed one arrives with none of the skill attached, so the agent answers it from whatever is left in the conversation. That is why every example below names it on every line. Measured on 2026-08-12: a three-turn conversation with the name on every message reached the skill on all three turns, in two separate runs. The same conversation named only at the start reached it on the first turn and then lost both follow-ups, and one of those follow-ups was filed into the agent's own long-term memory instead of onto the calendar, reported back as saved, with nothing on the schedule to show for it.
-
 **Alerts are not affected.** They are delivered by a scheduled job rather than by a conversation, so alerts you have already created arrive on time whether or not you name the skill when you ask about it.
 
 <details>

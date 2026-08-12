@@ -3875,6 +3875,10 @@ def report_workspace_agreement(home: Path) -> None:
         print(f"  dispatcher workspace: {recorded}")
         print("    MISMATCH — the dispatcher polls that one; this command is")
         print("    using the one above. Alerts created here are never sent.")
+        print("    Do NOT re-run a write against the other workspace to make the")
+        print("    alert fire. Measured 2026-08-12: an agent read this and re-ran")
+        print("    its own add with --home, so the reminder existed twice and the")
+        print("    user was set to be told twice.")
         print("    Setup without --home corrects it. If the user asked for")
         print("    something else, do that first and mention this at the end.")
 

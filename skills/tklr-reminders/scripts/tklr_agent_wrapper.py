@@ -100,6 +100,10 @@ ITEMTYPE = {
 }
 
 TYPENAME = {char: name for name, char in ITEMTYPE.items()}
+# The engine rewrites a completed task's itemtype to `x`. It is not one of
+# ours to create, but it has to be readable: `show` refused a finished task
+# outright ("no reminder with id 21") and `find` printed the bare `x`.
+TYPENAME["x"] = "finished"
 
 
 def use_token(use: str, type_name: str) -> str:
@@ -1050,13 +1054,18 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
         parts.append(f"@s {resolved}")
     elif args.type in ("event", "goal"):
         die(f"a {args.type} needs --when")
+    elif args.timezone:
+        die("--timezone only means something with --when")
 
+    # AFTER the chain above, never inside it: these were once wedged between its
+    # last two branches, which re-parented `elif args.timezone` onto the project
+    # check and made --timezone fail for every type. Found by walking the flags
+    # one at a time, which is the only reason it did not ship.
+    #
     # A goal with no target, and a project with no steps, are both stored as
     # DRAFTS by the engine while it reports success -- a record that appears in a
     # search looking real and fires nothing. Measured 2026-08-11: asked for a
     # reading goal, an agent spent 292 seconds and left two of them behind.
-    # Refused here instead, because the missing piece is the thing that makes the
-    # type mean anything, and a refusal that names it costs one command.
     if args.type == "goal" and not args.target:
         die("a goal needs --target, or the store keeps it as a draft that "
             "never fires",
@@ -1068,8 +1077,6 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
             "Give the steps in order: --step \"Order timber\" --step \"Strip "
             "deck\" --step \"Apply stain\".",
             "If there are no steps yet, a task is the better type.")
-    elif args.timezone:
-        die("--timezone only means something with --when")
 
     if args.duration:
         if not re.fullmatch(r"(\d+[wdhms])+", args.duration.strip()):
@@ -1259,9 +1266,25 @@ def check_alert_margin(offsets, resolved, now: datetime, warnings: list) -> None
         "start 8 minutes out with --alert 5m.")
 
 
-def report_alert_times(entry: str, resolved: str | None, now: datetime) -> None:
+def report_alert_times(entry: str, resolved: str | None, now: datetime,
+                       home: Path | None = None, rid: int | None = None) -> None:
+    """Say when each alert fires, from the occurrence the store actually holds.
+
+    The composed entry is the WRONG source when a zone is involved. `--when
+    "2026-08-21 9am" --timezone US/Pacific` composes `@s 2026-08-21 09:00`, and
+    9am Pacific is 11am on a Central machine, so reporting the alert from the
+    naive string put the notification two hours early -- 08:45 where `list`
+    correctly showed 10:45. Measured 2026-08-11. The store has already converted
+    it, so the store is asked when there is a record to ask about.
+    """
     m = re.search(r"@a ([^:]+):", entry)
     start = parse_resolved(resolved)
+    if home is not None and rid is not None:
+        stored = sorted(when for (r, _), when in occurrence_starts(home).items()
+                        if r == rid)
+        ahead = [w for w in stored if w >= now]
+        if ahead or stored:
+            start = (ahead or stored)[0]
     if not (m and start):
         return
     for off in [o.strip() for o in m.group(1).split(",")]:
@@ -1328,7 +1351,7 @@ def show_output(proc: subprocess.CompletedProcess[str]) -> None:
 # `for: ryan @~ Order timber &r a @~ Strip deck &r b:a ...`. A project
 # whose steps are invisible in `show` is a project nobody can work.
 ENTRY_TOKENS = re.compile(r"@([a-zA-Z+~-])\s+(.*?)(?=\s+@[a-zA-Z+~-]\s|$)")
-ENTRY_START = re.compile(r"^([*~^%!\-?])\s+(.*)$")
+ENTRY_START = re.compile(r"^([*~^%!x\-?])\s+(.*)$")
 
 # Label, and how much detail is worth a line of its own.
 TOKEN_LABELS = {
@@ -1445,6 +1468,11 @@ def entry_in_words(entry: str) -> list[str]:
             value = recurrence_in_words(value)
         elif key == "a":
             value = alerts_in_words(value)
+        elif key == "s" and " z " in value:
+            # `@s 2026-08-14 15:00 z US/Central`: the `z` is the store's marker
+            # for a zone and means nothing to a reader.
+            when_part, _, zone = value.partition(" z ")
+            value = f"{when_part} ({zone.strip()})"
         elif key in ("e", "n", "o"):
             value = period_in_words(value)
         elif key == "w":
@@ -1660,7 +1688,20 @@ LISTED_ID = re.compile(r"\((\d+)\)\s*$")
 # else: an agent reading one back to a user rendered '𝕒𝕣' as "@ar". 𝕒 is
 # dropped because the bracket that follows states the alert outright; 𝕣 is
 # kept as a word, being the one thing it says that nothing else does.
-ROW_MARKERS = {"\U0001d552": "", "\U0001d563": "[repeats]"}
+# The engine's own list (model.py): 𝕒 has alerts, 𝕘 has a link, 𝕠 has an offset,
+# 𝕣 repeats. Only two were handled here, so `task: Water plants 𝕠 (id 22)` went
+# out with a glyph in it -- the same failure that had an agent read `𝕒𝕣` back to
+# a user as "@ar".
+ROW_MARKERS = {
+    "\U0001d552": "",                       # alerts: the bracket already says it
+    "\U0001d558": "",                       # a link: not worth a word in a row
+    "\U0001d560": "[repeats after it is done]",
+    "\U0001d563": "[repeats]",
+}
+# Anything else in the double-struck block is a marker this wrapper has not been
+# told about. Stripped rather than passed through, because a glyph nobody can
+# read is worse than a missing hint, and the engine may add more.
+UNKNOWN_MARKER = re.compile(r"[\U0001d552-\U0001d56b]")
 
 
 def plain_markers(line: str) -> tuple[str, str]:
@@ -1668,6 +1709,7 @@ def plain_markers(line: str) -> tuple[str, str]:
     notes = [word for glyph, word in ROW_MARKERS.items() if glyph in line and word]
     for glyph in ROW_MARKERS:
         line = line.replace(glyph, "")
+    line = UNKNOWN_MARKER.sub("", line)
     return re.sub(r"\s{2,}", " ", line).rstrip(), " ".join(notes)
 
 
@@ -1752,7 +1794,7 @@ def list_header(today: date, first: date | None, span: int) -> str:
 # miniature: it is compact, it is guessable, and an agent that has read a
 # hundred rows beginning `*` has learnt a spelling this wrapper will refuse.
 # Rows say the type instead.
-ROW_SIGIL = re.compile(r"^(\s*)([*~^%!\-?])(\s+)(?=\S)")
+ROW_SIGIL = re.compile(r"^(\s*)([*~^%!x\-?])(\s+)(?=\S)")
 
 
 def rows_say_the_type(lines: list[str]) -> list[str]:
@@ -1775,7 +1817,12 @@ def rows_say_the_type(lines: list[str]) -> list[str]:
 # right first try. The id is the only number in the row anyone can act on, so it
 # is the only one left, and it is labelled the way `find` labels it.
 TASK_ROW = re.compile(r"^(\s+)(\d+)\s+(?:([-+])(\d+)([dwhm])\s+)?(.*?)\s+\((\d+)\)\s*$")
-ROW_ID = re.compile(r"^(\s+.*?)\((\d+)\)(\s*(?:\[.*)?)$")
+# A row that has already been given its type word -- "event: ...", "task: ..." --
+# is the only thing whose trailing number is an id. Keyed on that rather than on
+# indentation, which was the earlier test and which excluded `find`'s rows
+# (column 0) while including the `Tasks (3)` heading, whose number is a COUNT.
+ROW_ID = re.compile(r"^(\s*(?:" + "|".join(sorted(set(TYPENAME.values()) | {"reminder"}))
+                    + r"):\s.*?)\((\d+)\)(\s*(?:\[.*)?)$")
 DUE_UNITS = {"d": "day", "w": "week", "h": "hour", "m": "minute"}
 
 
@@ -1815,7 +1862,50 @@ def events_beyond(home: Path, now: datetime, days: int) -> int:
                if edge < start <= horizon)
 
 
+
+def cmd_list_tasks(home: Path, now: datetime) -> int:
+    """Every unfinished task, soonest first.
+
+    The agenda view ranks tasks by urgency and shows only the top of that
+    ranking: measured 2026-08-11 with six tasks in the store, it printed two,
+    under a heading reading `Tasks (2)`. Nothing else listed tasks at all --
+    `--week` and `--date` are event views -- so "what do I need to do" had no
+    complete answer. Read from the store rather than from the agenda, because the
+    agenda is the thing doing the truncating.
+    """
+    rows = workspace_rows(home, """
+        SELECT r.id, r.subject, r.priority,
+               (SELECT MIN(d.start_datetime) FROM DateTimes d WHERE d.record_id = r.id)
+        FROM Records r WHERE r.itemtype = '~' ORDER BY r.id""")
+    if not rows:
+        print("No unfinished tasks.")
+        return 0
+    dated, undated = [], []
+    for rid, subject, priority, start in rows:
+        when = None
+        if start:
+            stamp = str(start)[:13]
+            try:
+                when = datetime.strptime(stamp, "%Y%m%dT%H%M")
+            except ValueError:
+                when = None
+        (dated if when else undated).append((when, rid, subject, priority))
+    dated.sort(key=lambda x: x[0])
+    print(f"Every unfinished task, soonest first. Today is {spelled_date(now.date())}.")
+    for when, rid, subject, priority in dated:
+        overdue = " OVERDUE" if when.date() < now.date() else ""
+        prio = f" [priority {priority}]" if priority else ""
+        print(f" task: {subject} (id {rid}) [{spelled_date(when.date())}]{prio}{overdue}")
+    for _, rid, subject, priority in undated:
+        prio = f" [priority {priority}]" if priority else ""
+        print(f" task: {subject} (id {rid}) [no date]{prio}")
+    print(f"  {len(rows)} task(s) in total.")
+    return 0
+
+
 def cmd_list(args, home: Path, now: datetime) -> int:
+    if getattr(args, "tasks", False):
+        return cmd_list_tasks(home, now)
     today = now.date()
     span = 1
     if args.date:
@@ -1854,6 +1944,14 @@ def cmd_list(args, home: Path, now: datetime) -> int:
     for line in label_ids(rows_say_the_type(annotate_alerts(clean_lines(listed), home, now))):
         print(line)
     if first is None:
+        shown_tasks = sum(1 for line in
+                          label_ids(rows_say_the_type(annotate_alerts(clean_lines(listed), home, now)))
+                          if line.lstrip().startswith("task:"))
+        all_tasks = len(workspace_rows(home, "SELECT id FROM Records WHERE itemtype = '~'"))
+        if all_tasks > shown_tasks:
+            print(f"  {all_tasks - shown_tasks} more task(s) exist. This view "
+                  f"ranks by urgency and shows only the top of that ranking: "
+                  f"`list --tasks` is all of them.")
         beyond = events_beyond(home, now, days=3)
         if beyond:
             print(f"  {beyond} more event(s) fall after those 3 days. This view "
@@ -1990,7 +2088,11 @@ def cmd_find(args, home: Path, now: datetime) -> int:
     # Counted BEFORE annotation: FOUND_ID anchors the id at the end of the line,
     # and an annotated row ends with its next occurrence instead.
     hits = sum(1 for line in raw if FOUND_ID.search(line))
-    shown = rows_say_the_type(annotate_found(raw, home, now))
+    # label_ids as well: `find <text>` comes back with "(id 18)" but the
+    # --person path goes through a different engine command whose rows say
+    # "(20)". One of those is the format that got read as an id and one is not,
+    # so both are made to say `id`.
+    shown = label_ids(rows_say_the_type(annotate_found(raw, home, now)))
     for line in shown:
         print(line)
     # More than one hit is the moment a destructive request becomes a guess.
@@ -2614,7 +2716,10 @@ def record_entry(home: Path, rid: int) -> str:
     absent. A new user's workspace is exactly the sparse case that triggers it.
     """
     proc = run_tklr(home, "details", str(rid))
-    starts = tuple(ITEMTYPE.values()) + ("?",)   # `?` so a draft still reads
+    # `?` so a draft still reads, `x` so a FINISHED task does: the engine
+    # rewrites the itemtype on completion, and without it here `show <id>` on
+    # something the user just completed answered "no reminder with id 21".
+    starts = tuple(ITEMTYPE.values()) + ("?", "x")
     entry: list[str] = []
     for line in (proc.stdout or "").splitlines():
         if line.startswith(("rruleset:", "id/cr/md:")):
@@ -3976,7 +4081,7 @@ def cmd_add(args, home: Path, now: datetime) -> int:
     print(f"created id {row[0] if row else '?'}:")
     for said in entry_in_words(entry):
         print(f"  {said}")
-    report_alert_times(entry, resolved, now)
+    report_alert_times(entry, resolved, now, home, row[0] if row else None)
     if row:
         verify_scheduled(home, row[0], entry, resolved, now, heal_failed)
     return 0
@@ -4305,6 +4410,9 @@ def main() -> int:
     g.add_argument("--tomorrow", action="store_true")
     g.add_argument("--week", action="store_true")
     g.add_argument("--date", help="a day, e.g. 'friday' or '2026-08-07'")
+    g.add_argument("--tasks", action="store_true",
+                   help="every unfinished task, soonest first — the agenda view "
+                        "shows only the most urgent few")
     l.add_argument("--days", type=int, help="how many days from --date")
     l.set_defaults(fn=cmd_list)
 

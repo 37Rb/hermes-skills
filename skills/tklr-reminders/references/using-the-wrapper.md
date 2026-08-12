@@ -60,7 +60,7 @@ reminders will go to someone else.
 | "What's this week look like?" | `$R list --week` |
 | "What's coming up?" | `$R list` — but this is the next **3 days** of events plus all tasks; it says how many events fall past that edge, and `list --week` or `find <text>` is how you see them. Never answer "you have nothing scheduled" from this view alone |
 | "How's next month?" | `$R list --date 2026-09-01 --days 35` |
-| "What do I need to do?" | `$R list` — tasks come back ranked by urgency |
+| "What do I need to do?" | `$R list --tasks` — EVERY unfinished task, soonest first. Plain `$R list` ranks by urgency and shows only the top few, so it is the wrong answer to this question |
 | "When's my next dentist appointment?" | `$R find dentist` |
 
 | "What's Jordan got on Friday?" | `$R list --date friday`, then keep her rows — or `$R find --person jordan` |

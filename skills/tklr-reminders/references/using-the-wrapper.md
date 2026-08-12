@@ -144,11 +144,12 @@ reported, confirms the record is not a draft, heals derived state, and prints
 when each alert will fire.
 
 **Work out whether the time they said is when the THING happens or when they
-want the PING.** "Dentist at 3, remind me an hour before" names the event, so the
-offset is `1h`. "Remind me at 7pm to put the bins out" names the notification,
-and there is no separate event time at all, so it is `--when "…7pm" --alert 0m`:
-an offset counts backwards from the start, so anything else moves the ping off
-the time they asked for. Measured twice on 2026-08-11 -- once by leaving `--alert`
+want the PING.** They take different flags. "Dentist at 3, remind me an hour
+before" names the event: `--alert 1h`. "Remind me at 7pm to put the bins out"
+names the notification: `--remind-at 7pm`, and the wrapper works out the offset,
+including zero when the two times are the same. Never do that subtraction
+yourself -- an offset counts backwards from the start, so any offset you guess
+moves the ping off the time they asked for. Measured twice on 2026-08-11 -- once by leaving `--alert`
 off and letting the default fill in an hour, once by passing `--alert 1h`
 outright -- and both times a request for 7pm produced a notification at 6pm.
 
@@ -174,7 +175,8 @@ to take on trust.
 | `--when` | `"tomorrow 3pm"`, `"friday"`, `"in 2 hours"`, `"2026-08-15 09:00"` |
 | `--duration` | `30m`, `1h`, `1h30m` |
 | `--for` | comma-separated people — `alex` or `alex,jordan` |
-| `--alert` | offsets **before** the start: `1d,1h,15m`. `0m` fires AT the start — see below |
+| `--alert` | offsets **before** the start: `1d,1h,15m`. `0m` fires AT the start |
+| `--remind-at` | a clock time to be notified AT: `--remind-at 7pm`. Works out the offset itself; use this whenever the user names the time they want the ping |
 | `--via` | channel letters: `r`, or `r,e` |
 | `--note` `--location` `--priority` `--notice` | extra detail, place, 1–5, early warning |
 | `--repeat` | how often, in words: `"weekdays"`, `"last day of the month"` — see below |
@@ -266,7 +268,8 @@ All verified against the engine (tklr 1.0.43). `R` is `scripts/tklr_agent_wrappe
 | Request | Command |
 |---------|---------|
 | "Dentist Friday at 3, remind me a day and an hour before" | `--type event --subject Dentist --when "friday 3pm" --duration 1h --for alex --alert 1d,1h --via r` |
-| "Put the bins out at 7pm on Tuesdays, remind me at 7" | the 7pm is when they want the ping, so the offset is zero: `--type task --subject "Put bins out" --when "tuesday 7pm" --repeat "Tuesdays" --for alex --alert 0m --via r` |
+| "Put the bins out at 7pm on Tuesdays, remind me at 7" | the 7pm is when they want the ping: `--type task --subject "Put bins out" --when "tuesday 7pm" --repeat "Tuesdays" --for alex --remind-at 7pm --via r` |
+| "Jack's class is at 5:30, remind me at 4:45" | again the ping time is named, and the wrapper does the subtraction: `--type event --subject "Jiu jitsu" --when "thursday 5:30pm" --for alex --remind-at 4:45pm --via r` |
 | "Coffee with Sam tomorrow 11:30" | `--type event --subject "Coffee with Sam" --when "tomorrow 11:30" --duration 45m --for alex --alert 15m --via r` |
 | "Standup every weekday at 9" | `--type event --subject Standup --when "2026-08-03 9am" --duration 30m --repeat "weekdays" --for alex --alert 10m --via r` |
 | "Pay the mortgage on the 1st every month" | `--type task --subject "Pay mortgage" --when 2026-08-01 --repeat "monthly" --priority 1 --for alex --alert 1d --via r,e` |

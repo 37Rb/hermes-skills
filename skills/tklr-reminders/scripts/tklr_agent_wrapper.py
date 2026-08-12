@@ -976,6 +976,47 @@ def finish_recurrence(value: str, built: str, hours: list[int] | None,
 # entry assembly
 # ---------------------------------------------------------------------------
 
+
+def remind_at_offset(args, resolved: str | None, offsets: list[str]) -> list[str]:
+    """`--remind-at 7pm` as the offset that lands a notification at 7pm.
+
+    An offset counts BACKWARDS from the start, which is the right shape for
+    "warn me an hour before" and the wrong shape for "remind me AT seven". The
+    second is the more common sentence and it has no flag, so the agent supplied
+    the only one it had -- measured on 2026-08-11 as `--alert 1h` and `--alert
+    15m` on requests for 7pm, producing 6pm and 6:45pm. Documenting the arithmetic
+    did not change it; a flag shaped like the request might.
+
+    Same start and same clock time means an offset of zero, which fires at the
+    start. A time earlier in the day is the difference. Later than the start is
+    refused rather than wrapped to the day before, which is never what anyone
+    means by "remind me at".
+    """
+    wanted = getattr(args, "remind_at", None)
+    if not wanted:
+        return offsets
+    if offsets:
+        die("--remind-at and --alert say the same thing two ways",
+            "Use --remind-at for a clock time ('remind me at 7pm'), --alert for "
+            "a lead time ('an hour before'). Not both.")
+    if not resolved:
+        die("--remind-at needs --when, so there is a start to measure from")
+    start = parse_resolved(resolved)
+    hm = parse_time(wanted)
+    if start is None or hm is None:
+        die(f"--remind-at {wanted!r} is not a clock time",
+            "Give a time of day: '7pm', '6:45pm', '18:00'.")
+    ping = start.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+    minutes = int((start - ping).total_seconds() // 60)
+    if minutes < 0:
+        die(f"--remind-at {wanted!r} is after the start ({start:%H:%M})",
+            "An alert fires before its reminder, never after. Either move the "
+            "start, or say the lead time with --alert.")
+    warnings.append(f"--remind-at {wanted} on a {start:%H:%M} start is "
+                    f"{minutes} minute(s) before it")
+    return [f"{minutes}m"]
+
+
 def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]:
     """Return (entry, resolved_when, has_time)."""
     if args.type not in ITEMTYPE:
@@ -1076,6 +1117,7 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
 
     # alerts
     offsets = clean_list(args.alert)
+    offsets = remind_at_offset(args, resolved, offsets)
     letters = clean_list(args.via)
     if offsets and not letters:
         die("--alert needs --via to say which channel(s) to use",
@@ -1256,7 +1298,13 @@ def show_output(proc: subprocess.CompletedProcess[str]) -> None:
 # model copying a token it had been shown. `tklr` itself is still there for a
 # human who wants to look.
 
-ENTRY_TOKENS = re.compile(r"@([a-zA-Z])\s+(.*?)(?=\s+@[a-zA-Z]\s|$)")
+# `+` and `-` are token letters too -- extra dates and skipped ones -- and
+# leaving them out of the class did not merely lose them: the lookahead
+# stopped seeing where the previous token ENDED, so `@- 20260818T1900` was
+# swallowed into the alert above it and printed as part of it. A skipped
+# occurrence is exactly what someone asks about after saying "we are away
+# that week", so it is also the wrong thing to lose.
+ENTRY_TOKENS = re.compile(r"@([a-zA-Z+-])\s+(.*?)(?=\s+@[a-zA-Z+-]\s|$)")
 ENTRY_START = re.compile(r"^([*~^%!\-?])\s+(.*)$")
 
 # Label, and how much detail is worth a line of its own.
@@ -1299,6 +1347,22 @@ def alerts_in_words(value: str) -> str:
     return f"{said}, on channel{plural} {chans}"
 
 
+
+def stamp_in_words(stamp: str) -> str:
+    """`20260818T1900` as a date someone can read back."""
+    text = stamp.strip()
+    m = re.fullmatch(r"(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2}))?Z?", text)
+    if not m:
+        return text
+    y, mo, d, hh, mm = m.groups()
+    try:
+        when = date(int(y), int(mo), int(d))
+    except ValueError:
+        return text
+    said = spelled_date(when)
+    return f"{said} at {hh}:{mm}" if hh else said
+
+
 def entry_in_words(entry: str) -> list[str]:
     """A stored entry as labelled English lines, with no tklr syntax in them.
 
@@ -1334,6 +1398,10 @@ def entry_in_words(entry: str) -> list[str]:
             value = join_words([p.split("/")[0] for p in value.split(",")])
         elif key == "p":
             value = f"{value} (1 is highest)"
+        elif key in ("+", "-"):
+            # Stored as `20260818T1900`, which is the store's shape and not an
+            # answer to "which week are we skipping".
+            value = join_words([stamp_in_words(v) for v in value.split(",")])
         lines.append(f"  {label}: {value}")
     if unknown:
         lines.append(f"  ({unknown} further stored field(s) this wrapper does "
@@ -3552,12 +3620,14 @@ def report_workspace_agreement(home: Path) -> None:
     if not recorded:
         print("  dispatcher workspace: NOT RECORDED — it resolves its own, which")
         print("    differs from this one whenever the scheduler's environment does.")
-        print("    Run setup to record it.")
+        print("    Setup records it. If the user asked for something else,")
+        print("    do that first and mention this once, at the end.")
     elif Path(recorded).expanduser() != home:
         print(f"  dispatcher workspace: {recorded}")
         print("    MISMATCH — the dispatcher polls that one; this command is")
         print("    using the one above. Alerts created here are never sent.")
-        print("    Run setup without --home to correct it.")
+        print("    Setup without --home corrects it. If the user asked for")
+        print("    something else, do that first and mention this at the end.")
 
     mine = tklr_own_home()
     if mine is None:
@@ -4052,6 +4122,9 @@ def main() -> int:
     a.add_argument("--duration", help="how long it lasts, e.g. 1h, 30m")
     a.add_argument("--for", dest="for_whom", help="comma-separated people, e.g. alex,jordan")
     a.add_argument("--alert", help="offsets BEFORE the start, e.g. 1d,1h,15m (needs --via)")
+    a.add_argument("--remind-at", dest="remind_at",
+                   help="a CLOCK TIME to be notified at, e.g. 7pm — for "
+                        "'remind me at 7'. Works out the offset for you")
     a.add_argument("--via", help="channel letters to deliver on, e.g. r,e (needs --alert)")
     a.add_argument("--use", help="for jots: the time-tracking category it counts "
                    "toward, e.g. exercise.walking (a dot nests it under exercise)")
@@ -4122,6 +4195,8 @@ def main() -> int:
     e.add_argument("--for", dest="for_whom",
                    help="replace who it is for, comma-separated")
     e.add_argument("--alert", help="new offsets BEFORE the start, e.g. 1d,1h")
+    e.add_argument("--remind-at", dest="remind_at",
+                   help="a CLOCK TIME to be notified at, e.g. 7pm")
     e.add_argument("--via", help="new channel letters, e.g. r,e. Given alone, "
                                  "the existing offsets are kept")
     e.add_argument("--use", help="for jots: the time-tracking category it counts "

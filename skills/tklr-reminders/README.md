@@ -17,34 +17,34 @@ Six kinds of reminder cover everything you'd ask for. You don't need to know the
 Something that happens at a particular time. It goes on the calendar, it can hold travel time either side, and it is the only type that really needs a clock.
 
 ```
-You:    Lunch with Ed Friday at noon, an hour and a half, nudge me 15
+You:    /tklr Lunch with Ed Friday at noon, an hour and a half, nudge me 15
         minutes before
 Agent:  Added: Lunch with Ed, Friday 12:00–13:30. Reminder at 11:45.
 
-You:    It's across town, hold half an hour either side
+You:    /tklr It's across town, hold half an hour either side
 Agent:  Updated: 30 minutes of travel before and after, so Friday now
         blocks 11:30–14:00. The reminder is unchanged.
 
-You:    Am I free Tuesday at 3? Sam wants to get coffee
+You:    /tklr Am I free Tuesday at 3? Sam wants to get coffee
 Agent:  Tuesday's clear from 1pm, but you have a 1:1 with Dana at 4:30.
         A 3pm coffee fits with room to spare.
 
-You:    Book it, 45 minutes, at Cafe Ambrosia, nudge me 15 before
+You:    /tklr Book it, 45 minutes, at Cafe Ambrosia, nudge me 15 before
 Agent:  Added: Coffee with Sam, Tuesday 15:00–15:45 at Cafe Ambrosia.
         Reminder at 14:45.
 
-You:    Standup every weekday at 9, ten minutes ahead is plenty
+You:    /tklr Standup every weekday at 9, ten minutes ahead is plenty
 Agent:  Added: Standup, weekdays at 09:00, reminder at 08:50.
 
-You:    What's on Tuesday?
+You:    /tklr What's on Tuesday?
 Agent:  Three things: Standup 09:00, Coffee with Sam 15:00 at Cafe
         Ambrosia, 1:1 with Dana 16:30.
 
-You:    Move that 1:1 to Wednesday afternoon
+You:    /tklr Move that 1:1 to Wednesday afternoon
 Agent:  Moved: Wednesday at 16:30. Only this week's; the series carries
         on as before.
 
-You:    Skip next Monday's standup, keep the rest
+You:    /tklr Skip next Monday's standup, keep the rest
 Agent:  Done: next Monday is off. The rest of the series is untouched.
 ```
 
@@ -53,32 +53,32 @@ Agent:  Done: next Monday is off. The rest of the series is untouched.
 Something that requires an action to complete. A date is optional; what matters is that it stays on the list until it's done.
 
 ```
-You:    Remind me to pick up milk
+You:    /tklr Remind me to pick up milk
 Agent:  Added: Pick up milk. No date on it, so it just sits in your list
         until you tell me it's done.
 
-You:    Renew my passport by September 1st. It's important, and start
+You:    /tklr Renew my passport by September 1st. It's important, and start
         warning me a month out
 Agent:  Added: Renew passport, due 1 September, top priority. It starts
         showing as pending on 1 August, and I'll remind you a week
         before and again the day before.
 
-You:    Water the plants every Tuesday
+You:    /tklr Water the plants every Tuesday
 Agent:  Added: Water the plants, every Tuesday. It comes back on
         schedule whether or not you got to last week's.
 
-You:    Change the furnace filter every 90 days, counting from when I
+You:    /tklr Change the furnace filter every 90 days, counting from when I
         actually do it
 Agent:  Added: Change the furnace filter. This one repeats from
         completion instead: mark it done and the next lands 90 days from
         that day, so a late one can't drift the rest.
 
-You:    What do I need to get done?
+You:    /tklr What do I need to get done?
 Agent:  Pick up milk, and Water the plants by Tuesday. Renew passport
         isn't pending yet; that starts warning you on 1 August. Nothing
         overdue.
 
-You:    Got the milk
+You:    /tklr Got the milk
 Agent:  Done: Pick up milk is complete.
 ```
 
@@ -87,20 +87,20 @@ Agent:  Done: Pick up milk is complete.
 A collection of related tasks, tracked together, where some steps can wait on others.
 
 ```
-You:    Build the dog house: pick up materials, cut the panels, then
+You:    /tklr Build the dog house: pick up materials, cut the panels, then
         assemble it. Each one needs the one before it
 Agent:  Added: Build dog house, with three steps: Pick up materials,
         Cut the panels, Assemble. They're chained, so only Pick up
         materials is available right now.
 
-You:    Materials are in the truck
+You:    /tklr Materials are in the truck
 Agent:  Done: Pick up materials is complete. Cut the panels is next up.
 
-You:    How's the dog house going?
+You:    /tklr How's the dog house going?
 Agent:  One of three done. Cut the panels is available now; Assemble is
         waiting on it.
 
-You:    Jordan's cutting the panels
+You:    /tklr Jordan's cutting the panels
 Agent:  Noted: Cut the panels is on Jordan's list now, still part of the
         project.
 ```
@@ -110,16 +110,16 @@ Agent:  Noted: Cut the panels is on Jordan's list now, still part of the
 A target rate rather than a date, meaning *n* completions per period. Nothing is ever overdue, you're just ahead or behind.
 
 ```
-You:    I want to do interval training three times a week
+You:    /tklr I want to do interval training three times a week
 Agent:  Added: Interval training, 3 times a week. No fixed days on this
         one; I count completions against the target and tell you where
         you stand.
 
-You:    Did a session this morning
+You:    /tklr Did a session this morning
 Agent:  Logged one against Interval training. That's it recorded, not
         finished. The goal keeps running.
 
-You:    Show me the interval training goal
+You:    /tklr Show me the interval training goal
 Agent:  Interval training, target 3 a week, one completion recorded.
         Nothing is ever late on this one; a goal can only be ahead or
         behind.
@@ -130,15 +130,15 @@ Agent:  Interval training, target 3 a week, one completion recorded.
 Information for future reference. No schedule, no alerts; it's there so you can find it later.
 
 ```
-You:    Remember that the wifi password is on the back of the router
+You:    /tklr Remember that the wifi password is on the back of the router
 Agent:  Noted: Wifi password is on the back of the router. It won't
         remind you of anything; it'll just be there when you search.
 
-You:    Keep this: "Give me a pig! He looks you in the eye and treats you
+You:    /tklr Keep this: "Give me a pig! He looks you in the eye and treats you
         as an equal." Churchill
 Agent:  Saved, with #Churchill on it so it turns up when you search.
 
-You:    What was that quote about pigs?
+You:    /tklr What was that quote about pigs?
 Agent:  "Give me a pig! He looks you in the eye and treats you as an
         equal." Churchill.
 ```
@@ -148,20 +148,20 @@ Agent:  "Give me a pig! He looks you in the eye and treats you as an
 A few words dashed off while something is happening, stamped with the time so you can make sense of it later. Tklr's own description is "in the heat of battle when every second counts, jot down just enough to trigger your memory later when things have calmed down."
 
 ```
-You:    Jot down that I'm taking a walk
+You:    /tklr Jot down that I'm taking a walk
 Agent:  Logged at 13:14: taking a walk.
 
-You:    That walk was an hour and a quarter, count it as exercise
+You:    /tklr That walk was an hour and a quarter, count it as exercise
 Agent:  Updated: taking a walk at 13:14, 1h15m, filed under
         exercise.walking.
 
-You:    Note that the well pump was making a grinding noise
+You:    /tklr Note that the well pump was making a grinding noise
 Agent:  Logged at 15:20: well pump making a grinding noise.
 
-You:    Spent two hours on the Henderson invoices
+You:    /tklr Spent two hours on the Henderson invoices
 Agent:  Logged: Henderson invoices, 2h, filed under billing.henderson.
 
-You:    Where did my time go this month?
+You:    /tklr Where did my time go this month?
 Agent:  4 hours logged. Billing 2h, all Henderson. Exercise 2h, split
         1h15m walking and 40m interval training.
 ```
@@ -211,7 +211,9 @@ Do this now, because everything below uses `/tklr`. The long name never stops wo
 
 **Why it matters.** A bare "what's on my to-do list?" with no `/tklr` in front of it may never reach the skill. 
 
-**Alerts are not affected.** They are delivered by a scheduled job rather than by a conversation, so alerts you have already created arrives on time whether or not you name the skill when you ask about it.
+**Name it on every message, not just the first one.** A follow-up is a separate message, and an unnamed one arrives with none of the skill attached, so the agent answers it from whatever is left in the conversation. That is why every example below names it on every line. Measured on 2026-08-12: a three-turn conversation with the name on every message reached the skill on all three turns, in two separate runs. The same conversation named only at the start reached it on the first turn and then lost both follow-ups, and one of those follow-ups was filed into the agent's own long-term memory instead of onto the calendar, reported back as saved, with nothing on the schedule to show for it.
+
+**Alerts are not affected.** They are delivered by a scheduled job rather than by a conversation, so alerts you have already created arrive on time whether or not you name the skill when you ask about it.
 
 <details>
 <summary>What the installer does</summary>

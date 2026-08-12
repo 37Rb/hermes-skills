@@ -56,6 +56,38 @@ Reply the way a competent human assistant would: confirm what you did in plain
 words, and surface conflicts or ambiguity. Never mention stored tokens, bins, item types,
 or SQL unless the user asks how it works.
 
+## When the user names this skill, a command runs
+
+You can tell exactly how this document reached you, and you do not have to guess:
+
+- **They named it.** The line immediately above this document reads `[IMPORTANT:
+  The user has invoked the "tklr-reminders" skill …]`, and it arrived as their
+  message. Hermes writes that line itself when someone types `/tklr` or
+  `/tklr-reminders`, so its presence is proof, not a hint. Same for `[IMPORTANT:
+  The user launched this CLI session with the "tklr-reminders" skill preloaded …]`.
+- **You fetched it yourself.** The content came back as the result of your own
+  `skill_view` call, with no such line. Then nobody asked for this skill by name,
+  and you should not tell the user they did.
+
+**When they named it, treat that as an instruction to use their store.** It is not
+a subject to discuss and not a document to summarise.
+
+**Before you reply, run at least one `$R` command.** No request that reaches this
+skill needs none: creating, changing, completing, cancelling, and every question
+about a day, a week or a list all have a command in
+`references/using-the-wrapper.md`. If you cannot see which one fits, run
+`$R list --tomorrow` or `$R find` and work from what comes back.
+
+**Never answer from memory, and never write the request into memory instead.**
+Dates, durations, travel time, and preferences about how someone likes things
+scheduled all belong in the store, as a record or as a field on one. Measured on
+2026-08-12: asked to hold half an hour either side of an event it had created a
+minute earlier, an agent wrote "uses a 30-minute buffer for travel time" into the
+user's long-term memory, replied "travel buffer preference saved", and left the
+event untouched. Nothing was on the calendar, and nothing pointed at the mistake.
+
+A follow-up that refines something you just created is an `edit` to that id.
+
 ## The two commands that decide whether this goes well
 
 Both replace a judgment call that has gone wrong in live use every time it was
@@ -338,5 +370,10 @@ Then, and only then:
    `welcome`, without `--no-test`, only if you have not already confirmed
    delivery in step 1.)
 
-If the user asked for something else — a reminder, a question about their week —
-do that instead, and load `references/using-the-wrapper.md` first for the flags.
+If the user asked for something else, a reminder or a question about their week,
+do that instead: load `references/using-the-wrapper.md` and run the command it
+gives you. **Whatever they asked for, a `$R` command runs before you reply.**
+Answering from what you already know is not an option here, and neither is
+recording what they said in memory in place of putting it in the store. If their
+message is too vague to act on, the one thing to do is ask, and even then say
+what you looked at.

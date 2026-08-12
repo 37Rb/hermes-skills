@@ -195,9 +195,9 @@ That loads the skill and it takes it from there: installs tklr, creates the work
 
 **On Matrix and Slack, type `!tklr-reminders setup` instead.** Those clients reserve `/` for their own commands, so a typed `/` never reaches Hermes; their adapters accept `!` and rewrite it. Every other platform uses `/`.
 
-### A shorter name
+### Name (alias) the skill: `/tklr`
 
-`/tklr-reminders` is a lot to type for something you reach for several times a day. You can register `/tklr` as an alias for the same skill:
+Naming the skill is what makes it answer, and `/tklr-reminders` is too long to type many times a day, so register the short alias and use it:
 
 ```bash
 hermes config set quick_commands.tklr.type alias
@@ -205,11 +205,13 @@ hermes config set quick_commands.tklr.target tklr-reminders
 hermes gateway restart
 ```
 
-On Matrix and Slack it is `!tklr`, for the same reason `!tklr-reminders` applies there.
+Do this now, because everything below uses `/tklr`. The long name never stops working, so if you would rather not register anything, read `/tklr` as `/tklr-reminders` throughout. On Matrix and Slack it is `!tklr`.
 
-Do this before you need it, because everything below uses `/tklr`. The long name never stops working, so if you would rather not register anything, read `/tklr` as `/tklr-reminders` throughout.
+**Put the name in front of the request**, rather than sending it alone: `/tklr what's on my agenda?` or `/tklr add my dentist appointment Friday at 3`. That loads the skill and hands it the job in one message.
 
-The same trick helps later on. `/tklr what can you do?` or `/tklr add my dentist appointment` both reload the skill *and* give it the task, which is more reliable on a small model than the command alone.
+**Why it matters.** A bare "what's on my to-do list?" with no `/tklr` in front of it may never reach the skill. 
+
+**Alerts are not affected.** They are delivered by a scheduled job rather than by a conversation, so alerts you have already created arrives on time whether or not you name the skill when you ask about it.
 
 <details>
 <summary>What the installer does</summary>

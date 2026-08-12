@@ -58,7 +58,7 @@ reminders will go to someone else.
 | "What's on my calendar today?" | `$R list --today` |
 | "What about tomorrow?" | `$R list --tomorrow` |
 | "What's this week look like?" | `$R list --week` |
-| "What's coming up?" | `$R list` |
+| "What's coming up?" | `$R list` — but this is the next **3 days** of events plus all tasks; it says how many events fall past that edge, and `list --week` or `find <text>` is how you see them. Never answer "you have nothing scheduled" from this view alone |
 | "How's next month?" | `$R list --date 2026-09-01 --days 35` |
 | "What do I need to do?" | `$R list` — tasks come back ranked by urgency |
 | "When's my next dentist appointment?" | `$R find dentist` |

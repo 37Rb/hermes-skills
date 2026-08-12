@@ -1604,7 +1604,13 @@ def list_header(today: date, first: date | None, span: int) -> str:
     and lets the day headings enumerate the rest.
     """
     if first is None:
-        return (f"Everything still to come, soonest first. "
+        # NOT "everything still to come", which is what this said until an agent
+        # believed it. The bare list is the engine's agenda view: the next three
+        # days of events, plus every task ranked by urgency. Asked to move a
+        # dentist appointment four days out, an agent read this list, did not see
+        # it, and told the user there was no dentist appointment anywhere in
+        # their schedule. Measured 2026-08-11.
+        return (f"The next 3 days of events, and all tasks by urgency. "
                 f"Today is {spelled_date(today)}.")
     if span > 1:
         return f"Showing {span} days starting {spelled_date(first)}."
@@ -1670,6 +1676,19 @@ def label_ids(lines: list[str]) -> list[str]:
     return out
 
 
+def events_beyond(home: Path, now: datetime, days: int) -> int:
+    """How many occurrences fall after the agenda window, within a month.
+
+    The count exists so the list can say that it is a window rather than the
+    calendar. Bounded at a month because "there are more, somewhere" is not
+    worth a sentence, and because the store only materialises so far ahead.
+    """
+    edge = now + timedelta(days=days)
+    horizon = now + timedelta(days=31)
+    return sum(1 for start in occurrence_starts(home).values()
+               if edge < start <= horizon)
+
+
 def cmd_list(args, home: Path, now: datetime) -> int:
     today = now.date()
     span = 1
@@ -1708,6 +1727,13 @@ def cmd_list(args, home: Path, now: datetime) -> int:
     print(list_header(today, first, span))
     for line in label_ids(rows_say_the_type(annotate_alerts(clean_lines(listed), home, now))):
         print(line)
+    if first is None:
+        beyond = events_beyond(home, now, days=3)
+        if beyond:
+            print(f"  {beyond} more event(s) fall after those 3 days. This view "
+                  f"does not show them: use `list --week`, `list --date <date> "
+                  f"--days <n>`, or `find <text>` before saying nothing is "
+                  f"scheduled.")
     if short:
         print(f"  NOTE: only dates up to {short} have been worked out, so "
               f"anything later is missing from this list rather than absent. "

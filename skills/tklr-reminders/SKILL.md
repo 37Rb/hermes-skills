@@ -61,11 +61,25 @@ or SQL unless the user asks how it works.
 Both replace a judgment call that has gone wrong in live use every time it was
 left to prose. Run them; do not reason your way to something else.
 
-```bash
-R=${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py
+The wrapper you run for everything is this exact path:
 
-python3 $R setup --platform <the platform this conversation is on>
-python3 $R welcome
+```
+${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py
+```
+
+**Write that path out in every command.** Do not carry it in a shell variable:
+each command you run is its own shell, so a `R=…` set in one command is empty in
+the next, and `python3 $R status` then runs `python3 status` and fails with a
+file-not-found that has nothing to do with reminders. Measured on 2026-08-11: an
+agent that hit that fell back to raw SQL against a database that was not even the
+right one, and reported "no time was logged" about records sitting in the store.
+
+Below, `$R` is shorthand for that path. It is shorthand for READING, not
+something to type: whenever you run a command, write the whole path.
+
+```bash
+python3 ${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py setup --platform <the platform this conversation is on>
+python3 ${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py welcome
 ```
 
 
@@ -214,7 +228,7 @@ improvise examples.
 complete:**
 
 ```bash
-python3 $R status
+python3 ${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py status
 ```
 
 It reports the workspace, the channel letters, the dispatcher and the cron job,
@@ -256,11 +270,9 @@ takes a subcommand as its first argument. Running it without one is the single
 most common mistake made with this skill:
 
 ```bash
-R=${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py
-
-python3 $R --help          # right — lists the subcommands
-python3 $R --type event …  # WRONG — no subcommand; argparse rejects it
-python3 $R add --type event …
+python3 ${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py --help          # right — lists the subcommands
+python3 ${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py --type event …  # WRONG — no subcommand; argparse rejects it
+python3 ${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py add --type event …
 ```
 
 If the user asked you to set this up, or invoked this skill with no instruction
@@ -268,11 +280,11 @@ at all, **your first action is this one command.** Not a check, not a question,
 not `install.sh` — this:
 
 ```bash
-python3 $R setup --platform <the platform this conversation is on>
+python3 ${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py setup --platform <the platform this conversation is on>
 
 # Do you already know their email address — from your memory, or from
 # earlier in this conversation? Then add it to that same command:
-python3 $R setup --platform <platform> --email <their address>
+python3 ${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py setup --platform <platform> --email <their address>
 ```
 
 It does the whole job in one call: installs what it needs, creates the workspace,
@@ -306,7 +318,7 @@ Then, and only then:
    wrong:
 
    ```bash
-   python3 $R email --to <where they read mail>
+   python3 ${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py email --to <where they read mail>
    ```
 
    It reads the `From:` address from himalaya, writes the letter, tests it, and

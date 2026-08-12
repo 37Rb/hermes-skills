@@ -1628,6 +1628,41 @@ def rows_say_the_type(lines: list[str]) -> list[str]:
     return said
 
 
+# A task row arrives as ` 62 -1d Get oil changed in the van (10)`: an urgency
+# score, a due offset, the subject, and the id in bare brackets. Measured twice
+# on 2026-08-11, in independent runs, the agent read the LEADING number as the id
+# and spent six commands on `delete 53`, `show 53`, `edit 53`, each answered "no
+# reminder with id 53" -- then ran `find`, which writes `(id 17)`, and got it
+# right first try. The id is the only number in the row anyone can act on, so it
+# is the only one left, and it is labelled the way `find` labels it.
+TASK_ROW = re.compile(r"^(\s+)(\d+)\s+(?:([-+])(\d+)([dwhm])\s+)?(.*?)\s+\((\d+)\)\s*$")
+ROW_ID = re.compile(r"^(\s+.*?)\((\d+)\)(\s*(?:\[.*)?)$")
+DUE_UNITS = {"d": "day", "w": "week", "h": "hour", "m": "minute"}
+
+
+def label_ids(lines: list[str]) -> list[str]:
+    """Make the id in a listed row unmistakable, and drop the ranking number."""
+    out = []
+    for line in lines:
+        task = TASK_ROW.match(line)
+        if task:
+            indent, _urgency, sign, count, unit, subject, rid = task.groups()
+            due = ""
+            if count:
+                word = DUE_UNITS.get(unit, unit)
+                plural = "" if count == "1" else "s"
+                due = (f" [overdue by {count} {word}{plural}]" if sign == "-"
+                       else f" [due in {count} {word}{plural}]" if count != "0"
+                       else " [due today]")
+            out.append(f"{indent}task: {subject} (id {rid}){due}")
+            continue
+        # Any other listed row: label the id, leaving section headings such as
+        # `Tasks (3)` alone -- those start at column 0 and carry a count.
+        hit = ROW_ID.match(line)
+        out.append(f"{hit.group(1)}(id {hit.group(2)}){hit.group(3)}" if hit else line)
+    return out
+
+
 def cmd_list(args, home: Path, now: datetime) -> int:
     today = now.date()
     span = 1
@@ -1664,7 +1699,7 @@ def cmd_list(args, home: Path, now: datetime) -> int:
         listed = run_tklr(home, "days", "--start", start, "--end", str(span),
                           "--plain", "--ids", "--width", FULL_WIDTH)
     print(list_header(today, first, span))
-    for line in rows_say_the_type(annotate_alerts(clean_lines(listed), home, now)):
+    for line in label_ids(rows_say_the_type(annotate_alerts(clean_lines(listed), home, now))):
         print(line)
     if short:
         print(f"  NOTE: only dates up to {short} have been worked out, so "
@@ -1799,7 +1834,7 @@ def cmd_find(args, home: Path, now: datetime) -> int:
 
 def free_rows(proc: subprocess.CompletedProcess[str]) -> None:
     """`free`'s day view, with each row saying its type instead of a sigil."""
-    for line in rows_say_the_type(clean_lines(proc)):
+    for line in label_ids(rows_say_the_type(clean_lines(proc))):
         print(line)
 
 

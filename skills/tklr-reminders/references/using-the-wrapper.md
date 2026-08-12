@@ -4,8 +4,11 @@ Everything you run to create, read, change or complete a reminder. Load this
 whenever you are about to compose a command; you do not need it to talk to the
 user about what the skill does.
 
-`$R` is defined for you in `SKILL.md`, already resolved to a real path. Use that
-line. Do not write a path here from memory: this file is read straight off disk
+`$R` below is shorthand for the wrapper's path, which `SKILL.md` gives you in
+full and already resolved. **Write that path out in every command you run.** A
+shell variable does not survive between commands -- each one is its own shell --
+so `python3 $R list` in a command where nothing set `R` runs `python3 list` and
+fails for a reason that has nothing to do with reminders. Do not write a path here from memory: this file is read straight off disk
 and is never template-substituted, so an absolute path written here goes stale
 the moment the skill is installed anywhere else, and a stale one is what makes
 an agent give up on the wrapper and start reaching past it.
@@ -272,6 +275,8 @@ All verified against the engine (tklr 1.0.43). `R` is `scripts/tklr_agent_wrappe
 | "Note: Sam prefers morning meetings" | `--type note --subject "Sam prefers morning meetings" --for alex` |
 | "Jot down that I am taking a walk" | `--type jot --subject "Taking a walk" --for alex` (timestamped now; pass `--when` for a different time) |
 | "That walk took an hour and a quarter, count it as exercise" | this follows the row above, so it edits that jot rather than filing a second one: `edit <id> --duration 1h15m --use exercise.walking` |
+| "I spent 45 minutes on the gutters this morning, log it as home maintenance" | already finished, so it is ONE command, not a create-then-edit: `--type jot --subject "Gutters" --duration 45m --use home.maintenance --for alex` |
+| "An hour and a half yesterday fixing the fence, same category" | the same, with the day named: `--type jot --subject "Fixing the fence" --when yesterday --duration 1h30m --use home.maintenance --for alex`. A duration belongs in `--duration` and a category in `--use`; a jot with the time in its subject and the category in `--note` is invisible to `uses` |
 | "Where did my time go this month?" | `uses` (add `--use exercise` to filter, `--months 2607-2608` for a range) |
 
 **`--when` is when the thing happens, never when the reminder fires.** "Class

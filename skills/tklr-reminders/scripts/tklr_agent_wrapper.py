@@ -1078,6 +1078,17 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
             "deck\" --step \"Apply stain\".",
             "If there are no steps yet, a task is the better type.")
 
+    # A start already in the past fires nothing. For a jot that is the point --
+    # "I spent an hour on it yesterday" -- but for an event or a task it is
+    # usually a date worked out wrongly, and it is silent: the record is created,
+    # looks right in every listing, and simply never notifies.
+    if resolved and args.type in ("event", "task"):
+        started = parse_resolved(resolved)
+        if started and started < now:
+            warnings.append(f"{resolved} is in the past, so this will not "
+                            f"notify anyone; say so rather than confirming it "
+                            f"as scheduled")
+
     if args.duration:
         if not re.fullmatch(r"(\d+[wdhms])+", args.duration.strip()):
             die(f"--duration {args.duration!r} is not a timeperiod",
@@ -1486,7 +1497,14 @@ def entry_in_words(entry: str) -> list[str]:
             # Stored as `20260818T1900`, which is the store's shape and not an
             # answer to "which week are we skipping".
             value = join_words([stamp_in_words(v) for v in value.split(",")])
-        lines.append(f"  {label}: {value}")
+        # A repeated key is one field with several values -- two people on one
+        # reminder printed as two `for:` lines, which reads like two records.
+        for i, existing in enumerate(lines):
+            if existing.startswith(f"  {label}: "):
+                lines[i] = f"{existing} and {value}"
+                break
+        else:
+            lines.append(f"  {label}: {value}")
     for n, step in enumerate(steps_in_words(raw_steps), 1):
         lines.append(f"  step {n}: {step}")
     if unknown:
@@ -2195,10 +2213,52 @@ def cmd_delete(args, home: Path, now: datetime) -> int:
             return skip_occurrences(home, args.id, entry, wanted, now,
                                     args.dry_run)
     if args.from_dt:
-        extra += ["--from", resolve_when(args.from_dt, now)[0]]
+        return end_series_at(home, args.id, args.from_dt, now, args.dry_run)
     if args.dry_run:
         extra.append("--dry-run")
     return delegate("tklr_mutate.py", ["delete", str(args.id), *extra], home)
+
+
+
+def end_series_at(home: Path, rid: int, cutoff_text: str, now: datetime,
+                  dry_run: bool) -> int:
+    """Stop a repeating reminder from `cutoff_text` onward, keeping what precedes it.
+
+    Done here rather than through the engine's `delete_this_and_future`, which
+    declines every time on a record this wrapper writes. Its method appends
+    `&u <cutoff>` as a LOOSE token at the end of the entry -- after `@b` and
+    `@a` -- when `&u` is an option OF the recurrence. The rebuilt entry then
+    fails to parse and the edit is refused, which reached the caller as "tklr
+    declined" with no way forward. Measured 2026-08-11 on a clean weekly series
+    and on one with a skip: both refused.
+
+    Setting the recurrence's own `&u` is the same operation expressed where it
+    belongs, and it goes through the set-replaces-its-options path, so the old
+    `&u` on a second call is replaced rather than doubled.
+    """
+    entry = record_entry(home, rid)
+    if not entry:
+        die(f"no reminder with id {rid}")
+    repeat = token_value(entry, "r")
+    if not repeat:
+        die(f"id {rid} does not repeat, so there is no series to end",
+            "To remove it outright: " f"{sys.argv[0]} delete {rid}")
+    stamp = parse_resolved(resolve_when(cutoff_text, now)[0])
+    if stamp is None:
+        die(f"could not read {cutoff_text!r} as a date and time")
+    cutoff = stamp - timedelta(minutes=1)
+    kept = re.sub(r"\s*&u\s+\S+", "", repeat).strip()
+    updated = f"{kept} &u {cutoff:%Y%m%dT%H%M}"
+    if dry_run:
+        print(f"WOULD remove the occurrence at {spelled_date(stamp.date())} "
+              f"and every later one from id {rid}, keeping the earlier ones.")
+        return 0
+    rc = delegate("tklr_mutate.py", ["edit", str(rid), "--set", f"@r {updated}"], home)
+    if rc == 0:
+        heal_alerts(home)
+        print(f"  id {rid} now stops before {spelled_date(stamp.date())}: that "
+              f"occurrence and every later one are gone, the earlier ones stay.")
+    return rc
 
 
 def as_instant(stamp_text: str) -> str:
@@ -2523,6 +2583,17 @@ def cmd_edit(args, home: Path, now: datetime) -> int:
         sets.append(f"@s {stamp_text}")
     elif args.timezone:
         die("--timezone only means something together with --when")
+
+    # A start already in the past fires nothing. For a jot that is the point --
+    # "I spent an hour on it yesterday" -- but for an event or a task it is
+    # usually a date worked out wrongly, and it is silent: the record is created,
+    # looks right in every listing, and simply never notifies.
+    if resolved and args.type in ("event", "task"):
+        started = parse_resolved(resolved)
+        if started and started < now:
+            warnings.append(f"{resolved} is in the past, so this will not "
+                            f"notify anyone; say so rather than confirming it "
+                            f"as scheduled")
 
     if args.duration:
         if not re.fullmatch(r"(\d+[wdhms])+", args.duration.strip()):
@@ -4434,7 +4505,10 @@ def main() -> int:
     dl.add_argument("--instance",
                     help="skip one occurrence, or several comma-separated. "
                          "Keeps the rest of the series, and the id")
-    dl.add_argument("--from", dest="from_dt")
+    dl.add_argument("--from", dest="from_dt",
+                    help="delete this occurrence AND EVERY LATER ONE, keeping "
+                         "the earlier ones. Ends a series from a date onward; "
+                         "cannot be undone")
     dl.add_argument("--dry-run", action="store_true"); dl.set_defaults(fn=cmd_delete)
 
     e = sub.add_parser(
@@ -4478,7 +4552,12 @@ def main() -> int:
 
     mv = sub.add_parser("move", help="reschedule one occurrence")
     mv.add_argument("id", type=int)
-    mv.add_argument("--instance", required=True); mv.add_argument("--to", required=True)
+    mv.add_argument("--instance", required=True,
+                    help="the occurrence to move, exactly as it is scheduled: "
+                         "'2026-08-12 09:00'")
+    mv.add_argument("--to", required=True,
+                    help="where that one occurrence goes. The rest of the "
+                         "series stays where it is")
     mv.add_argument("--dry-run", action="store_true"); mv.set_defaults(fn=cmd_move)
 
     c = sub.add_parser("channels", help="list or configure alert channels")

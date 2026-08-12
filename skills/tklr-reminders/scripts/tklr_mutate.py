@@ -44,16 +44,17 @@ from pathlib import Path
 TESTED_AGAINST = "1.0.43"  # informational only; not enforced
 
 UI_FALLBACK = (
-    "Workaround: the interactive UI is the only other place tklr exposes these\n"
-    "  operations — run `tklr ui` and select the reminder. For DELETE that is a\n"
-    "  genuine fallback. For RESCHEDULE it is NOT, either way: view.py's\n"
-    "  Reschedule calls the same reschedule_instance, which appends\n"
-    "  `@- old @+ new` and nothing else (tklr 1.0.43). With no `@r` no EXDATE\n"
-    "  is produced and the reminder ends up at BOTH times; with an `@r` the\n"
-    "  `@+` stops the record generating ANY occurrences and the whole series\n"
-    "  leaves the schedule. Use the wrapper's `move`, which writes no `@+`.\n"
-    "  Then tell whoever maintains this skill that tklr's internals moved, so\n"
-    "  the shim can be updated."
+    # Said in words, and without naming a command to run. This text reaches the
+    # agent, and it used to hand it the engine's interactive UI as a next step --
+    # the one thing this skill spends most of its rules keeping it away from, and
+    # on a path where the UI is actively harmful for a reschedule.
+    "What to do: for a DELETE, a person can do this in the engine's own\n"
+    "  interface. For a RESCHEDULE that is NOT a fallback -- the interface's\n"
+    "  own reschedule records the new time without removing the old one, so a\n"
+    "  one-off ends up at BOTH times, and a repeating reminder stops producing\n"
+    "  occurrences altogether and leaves the schedule. Use `move`, which does\n"
+    "  not do that. Either way, tell whoever maintains this skill: this means\n"
+    "  the engine's internals have moved and the shim needs updating."
 )
 
 

@@ -455,9 +455,47 @@ def tklr_own_home() -> Path | None:
     return Path(out[-1]).expanduser()
 
 
+_ampm_ensured: set[str] = set()
+
+
+def ensure_ampm(home: Path) -> None:
+    """tklr defaults to 24-hour lists. This skill speaks 12-hour with am/pm.
+
+    Only the `ampm = false` line is touched, so an apostrophe elsewhere in
+    the file is not rewritten into a parse failure. Once per workspace per
+    process: the next tklr command then prints `4:02pm` instead of `16:02`.
+    """
+    key = str(home)
+    if key in _ampm_ensured:
+        return
+    _ampm_ensured.add(key)
+    cfg = home / "config.toml"
+    try:
+        text = cfg.read_text(encoding="utf-8")
+    except OSError:
+        return
+    if re.search(r"^ampm\s*=\s*true\s*$", text, re.M):
+        return
+    new, n = re.subn(r"^ampm\s*=\s*false\s*$", "ampm = true", text,
+                     count=1, flags=re.M)
+    if n != 1:
+        return
+    try:
+        tomllib.loads(new)
+    except tomllib.TOMLDecodeError:
+        return
+    tmp = cfg.with_suffix(cfg.suffix + ".tmp")
+    try:
+        tmp.write_text(new, encoding="utf-8")
+        tmp.replace(cfg)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+
+
 def run_tklr(home: Path, *args: str) -> subprocess.CompletedProcess[str]:
     exe = shutil.which("tklr") or str(Path.home() / ".local" / "bin" / "tklr")
     try:
+        ensure_ampm(home)
         return subprocess.run([exe, "--home", str(home), *args],
                               capture_output=True, text=True, timeout=120)
     except FileNotFoundError:
@@ -1013,10 +1051,10 @@ def remind_at_offset(args, resolved: str | None, offsets: list[str]) -> list[str
     ping = start.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
     minutes = int((start - ping).total_seconds() // 60)
     if minutes < 0:
-        die(f"--remind-at {wanted!r} is after the start ({start:%H:%M})",
+        die(f"--remind-at {wanted!r} is after the start ({clock(start)})",
             "An alert fires before its reminder, never after. Either move the "
             "start, or say the lead time with --alert.")
-    warnings.append(f"--remind-at {wanted} on a {start:%H:%M} start is "
+    warnings.append(f"--remind-at {wanted} on a {clock(start)} start is "
                     f"{minutes} minute(s) before it")
     return [f"{minutes}m"]
 
@@ -1131,13 +1169,13 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
                 "Prefix with ~ for a learning interval: ~3d.")
         parts.append(f"@o {off}")
 
-    if args.travel:
-        legs = clean_list(args.travel)
+    if args.wrap:
+        legs = clean_list(args.wrap)
         if len(legs) == 1:
             legs = legs * 2
         if len(legs) != 2 or not all(re.fullmatch(r"(\d+[wdhms])+", l) for l in legs):
-            die(f"--travel {args.travel!r} needs one or two timeperiods",
-                "e.g. --travel 30m (both sides) or --travel 30m,15m (before,after).")
+            die(f"--wrap {args.wrap!r} needs one or two timeperiods",
+                "e.g. --wrap 30m (both sides) or --wrap 30m,15m (before, after).")
         parts.append(f"@w {legs[0]}, {legs[1]}")
 
     # project steps -> @~ jobs, each needing an &r label (a, b, c…)
@@ -1231,9 +1269,23 @@ def parse_resolved(resolved: str | None) -> datetime | None:
     return None
 
 
+def clock(when: datetime) -> str:
+    """12-hour time with am/pm. Minutes only when they are not :00.
+
+    Matches tklr's own ampm rendering (`9am`, `9:30am`) so a list row and
+    the alert the wrapper adds to it read as the same kind of time.
+    """
+    hour = when.hour % 12 or 12
+    suffix = "am" if when.hour < 12 else "pm"
+    if when.minute:
+        return f"{hour}:{when.minute:02d}{suffix}"
+    return f"{hour}{suffix}"
+
+
 def stamp(when: datetime, now: datetime) -> str:
     """Clock time alone is a lie for any other day — show the date too."""
-    return f"{when:%H:%M}" if when.date() == now.date() else f"{when:%Y-%m-%d %H:%M}"
+    time = clock(when)
+    return time if when.date() == now.date() else f"{when:%Y-%m-%d} {time}"
 
 
 def check_alert_margin(offsets, resolved, now: datetime, warnings: list) -> None:
@@ -1268,9 +1320,9 @@ def check_alert_margin(offsets, resolved, now: datetime, warnings: list) -> None
     late = now - fires
     detail = (f"{human(late)} in the past" if late.total_seconds() > 0
               else f"only {human(-late)} away")
-    die(f"that alert would never fire — it lands at {fires:%Y-%m-%d %H:%M}, {detail}",
-        f"start {start:%Y-%m-%d %H:%M} minus {off} = {fires:%H:%M}, and it is now "
-        f"{now:%H:%M}.",
+    die(f"that alert would never fire — it lands at {fires:%Y-%m-%d} {clock(fires)}, {detail}",
+        f"start {start:%Y-%m-%d} {clock(start)} minus {off} = {clock(fires)}, and it is now "
+        f"{clock(now)}.",
         f"an alert is only scheduled at least {int(MIN_ALERT_MARGIN.total_seconds() // 60)} "
         "minutes out; anything sooner is dropped with no warning.",
         "Either start it later or use a smaller offset — e.g. for a test, "
@@ -1302,7 +1354,7 @@ def report_alert_times(entry: str, resolved: str | None, now: datetime,
         fires = alert_fire_time(off, start)
         delta = fires - now
         when = ("in " + human(delta)) if delta.total_seconds() > 0 else (human(-delta) + " ago")
-        print(f"  alert ({off} before) fires {fires:%Y-%m-%d %H:%M} — {when}")
+        print(f"  alert ({off} before) fires {fires:%Y-%m-%d} {clock(fires)} — {when}")
 
 
 def human(delta: timedelta) -> str:
@@ -1368,7 +1420,7 @@ ENTRY_START = re.compile(r"^([*~^%!x\-?])\s+(.*)$")
 TOKEN_LABELS = {
     "s": "when", "e": "lasts", "r": "repeats", "a": "alerts", "b": "for",
     "d": "note", "l": "location", "g": "link", "p": "priority",
-    "n": "warn from", "o": "then again after", "w": "travel", "t": "target",
+    "n": "warn from", "o": "then again after", "w": "wrap", "t": "target",
     "u": "counts toward", "+": "extra dates", "-": "skipped dates",
     "~": "step",
 }
@@ -1406,6 +1458,21 @@ def alerts_in_words(value: str) -> str:
 
 
 
+def start_in_words(value: str) -> str:
+    """`2026-08-14 15:00 z US/Central` as a date and 12-hour clock."""
+    when_part, zone = value, ""
+    if " z " in value:
+        when_part, _, z = value.partition(" z ")
+        zone = f" ({z.strip()})"
+    text = when_part.strip()
+    parsed = parse_resolved(text)
+    if not parsed:
+        return value
+    if " " not in text and "T" not in text:
+        return spelled_date(parsed.date()) + zone
+    return f"{spelled_date(parsed.date())} at {clock(parsed)}{zone}"
+
+
 def stamp_in_words(stamp: str) -> str:
     """`20260818T1900` as a date someone can read back."""
     text = stamp.strip()
@@ -1418,7 +1485,13 @@ def stamp_in_words(stamp: str) -> str:
     except ValueError:
         return text
     said = spelled_date(when)
-    return f"{said} at {hh}:{mm}" if hh else said
+    if not hh:
+        return said
+    try:
+        moment = datetime(int(y), int(mo), int(d), int(hh), int(mm or 0))
+    except ValueError:
+        return f"{said} at {hh}:{mm}"
+    return f"{said} at {clock(moment)}"
 
 
 # A project step is stored as `@~ Strip deck &r b:a`: the text, then a label for
@@ -1479,11 +1552,10 @@ def entry_in_words(entry: str) -> list[str]:
             value = recurrence_in_words(value)
         elif key == "a":
             value = alerts_in_words(value)
-        elif key == "s" and " z " in value:
-            # `@s 2026-08-14 15:00 z US/Central`: the `z` is the store's marker
-            # for a zone and means nothing to a reader.
-            when_part, _, zone = value.partition(" z ")
-            value = f"{when_part} ({zone.strip()})"
+        elif key == "s":
+            # `@s 2026-08-14 15:00` (optional `z US/Central`): stored 24-hour,
+            # spoken 12-hour.
+            value = start_in_words(value)
         elif key in ("e", "n", "o"):
             value = period_in_words(value)
         elif key == "w":
@@ -1521,7 +1593,7 @@ def entry_in_words(entry: str) -> list[str]:
 TOKEN_FLAGS = {
     "s": "--when", "e": "--duration", "r": "--repeat", "a": "--alert/--via",
     "b": "--for", "d": "--note", "l": "--location", "g": "--link",
-    "p": "--priority", "n": "--notice", "o": "--offset", "w": "--travel",
+    "p": "--priority", "n": "--notice", "o": "--offset", "w": "--wrap",
     "t": "--target", "u": "--use",
 }
 
@@ -1683,8 +1755,8 @@ def alert_note(offsets: list[str], start: datetime) -> str:
     times = []
     for off in offsets:
         fires = alert_fire_time(off, start)
-        times.append(f"{fires:%-H:%M}" if fires.date() == start.date()
-                     else f"{fires:%Y-%m-%d %-H:%M}")
+        times.append(clock(fires) if fires.date() == start.date()
+                     else f"{fires:%Y-%m-%d} {clock(fires)}")
     return f"[{'alert' if len(times) == 1 else 'alerts'} {', '.join(times)}]"
 
 
@@ -2006,7 +2078,7 @@ def cmd_show(args, home: Path, now: datetime) -> int:
     nearest = next_occurrences(home, now).get(args.id)
     if nearest:
         when, ahead = nearest
-        print(f"  next occurrence: {when:%A, %B %-d, %Y at %H:%M}"
+        print(f"  next occurrence: {spelled_date(when.date())} at {clock(when)}"
               f"{'' if ahead else ' (in the past; nothing is left)'}")
     return 0
 
@@ -2092,7 +2164,7 @@ def annotate_found(lines: list[str], home: Path, now: datetime) -> list[str]:
         lead = "next" if still_ahead else "last was"
         note = alert_note(offsets.get(int(hit.group(1)), []), start)
         annotated.append(f"{line} [{lead} {spelled_date(start.date())} "
-                         f"at {start:%-H:%M}] {note}".rstrip())
+                         f"at {clock(start)}] {note}".rstrip())
     return annotated
 
 
@@ -2541,7 +2613,7 @@ def split_alert_token(value: str | None) -> tuple[list[str], list[str]]:
 # What the user may name in --clear, in their words rather than tklr's letters.
 CLEARABLE = {
     "duration": "e", "repeat": "r", "location": "l", "priority": "p",
-    "notice": "n", "offset": "o", "travel": "w", "note": "d",
+    "notice": "n", "offset": "o", "wrap": "w", "note": "d",
     "people": "b", "alerts": "a", "alert": "a", "use": "u", "link": "g",
 }
 
@@ -2632,13 +2704,13 @@ def cmd_edit(args, home: Path, now: datetime) -> int:
                 "Use e.g. 3d. Prefix with ~ for a learning interval: ~3d.")
         sets.append(f"@o {off}")
 
-    if args.travel:
-        legs = clean_list(args.travel)
+    if args.wrap:
+        legs = clean_list(args.wrap)
         if len(legs) == 1:
             legs = legs * 2
         if len(legs) != 2 or not all(re.fullmatch(r"(\d+[wdhms])+", l) for l in legs):
-            die(f"--travel {args.travel!r} needs one or two timeperiods",
-                "e.g. --travel 30m or --travel 30m,15m (before,after).")
+            die(f"--wrap {args.wrap!r} needs one or two timeperiods",
+                "e.g. --wrap 30m or --wrap 30m,15m (before, after).")
         sets.append(f"@w {legs[0]}, {legs[1]}")
 
     if args.for_whom:
@@ -2686,7 +2758,7 @@ def cmd_edit(args, home: Path, now: datetime) -> int:
         die("nothing to change",
             "Name at least one of --subject, --when, --duration, --alert, --via, "
             "--for, --note, --location, --priority, --notice, --offset, "
-            "--travel, --repeat, or --clear <field>.")
+            "--wrap, --repeat, or --clear <field>.")
 
     for w in warnings:
         print(f"  note: {w}")
@@ -2848,7 +2920,7 @@ def cmd_move(args, home: Path, now: datetime) -> int:
             id=args.id, when=args.to, dry_run=args.dry_run,
             subject=None, duration=None, for_whom=None, alert=None, via=None,
             note=None, location=None, priority=None, notice=None, timezone=None,
-            offset=None, travel=None, repeat=None, clear=None)
+            offset=None, wrap=None, repeat=None, clear=None)
         return cmd_edit(edit_args, home, now)
 
     instance, instance_had_time = resolve_when(args.instance, now)
@@ -3288,7 +3360,7 @@ def create_test_alert(letter: str, home: Path, _now: datetime) -> int:
     fires = next_minute + timedelta(minutes=offset_min)
     start = fires + timedelta(minutes=offset_min)
 
-    print(f"\ndelivery test: alert fires {fires:%H:%M} "
+    print(f"\ndelivery test: alert fires {clock(fires)} "
           f"(in {human(fires - now)}), delivered within a minute of that.")
     proc = subprocess.run(
         [sys.executable, str(Path(__file__).resolve()), "--home", str(home),
@@ -4511,7 +4583,8 @@ def main() -> int:
     a.add_argument("--notice", help="how long before it starts to show as pending")
     a.add_argument("--timezone", help="e.g. America/Chicago; default is local")
     a.add_argument("--offset", help="for tasks: reschedule this long after completion, e.g. 3d")
-    a.add_argument("--travel", help="travel time, e.g. 30m or 30m,15m (before,after)")
+    a.add_argument("--wrap", help="wrap before and after the event, e.g. 30m "
+                                 "or 30m,15m (before, after)")
     a.add_argument("--repeat", help="how often, in words: 'weekdays', "
                    "'Tuesdays and Thursdays', 'last day of the month', "
                    "'weekly until December 25'")
@@ -4591,7 +4664,8 @@ def main() -> int:
     e.add_argument("--notice", help="how long before it starts to show as pending")
     e.add_argument("--timezone", help="only with --when")
     e.add_argument("--offset", help="for tasks: reschedule this long after completion")
-    e.add_argument("--travel", help="travel time, e.g. 30m or 30m,15m")
+    e.add_argument("--wrap", help="wrap before and after the event, e.g. 30m "
+                                 "or 30m,15m (before, after)")
     e.add_argument("--repeat", help="how often, in words: 'weekdays', "
                    "'last day of the month' — replaces the old pattern")
     e.add_argument("--clear", help="remove fields entirely, comma-separated: "

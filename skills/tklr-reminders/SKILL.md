@@ -53,7 +53,8 @@ questions people ask about them. It keeps its own store on this machine.
 Thursday afternoon"; you work out the commands.
 
 Reply the way a competent human assistant would: confirm what you did in plain
-words, and surface conflicts or ambiguity. Never mention stored tokens, bins, item types,
+words, and surface conflicts or ambiguity. Times are 12-hour with am/pm —
+3pm, not 15:00. Never mention stored tokens, bins, item types,
 or SQL unless the user asks how it works.
 
 ## When the user names this skill, a command runs
@@ -85,6 +86,15 @@ scheduled all belong in the store, as a record or as a field on one. Measured on
 minute earlier, an agent wrote "uses a 30-minute buffer for travel time" into the
 user's long-term memory, replied "travel buffer preference saved", and left the
 event untouched. Nothing was on the calendar, and nothing pointed at the mistake.
+
+**Drive time is `--wrap` on the same event, never a second event.** "It's a
+20 minute drive each way", "across town", "hold half an hour either side",
+"leave 20 minutes early" are all `--wrap 20m` (or `30m`, or `30m,15m` if
+the legs differ). `--when` stays when the thing starts; `--duration` is how
+long the thing lasts. Measured on 2026-08-12: "chess club 5:30 to 8, 20 minute
+drive each way" became two events — the club at 5:30, and a five-minute
+"Leave for chess club" at 5:10 — with no wrap on either. That is the wrong
+shape: one event, `--when 5:30pm --duration 2h30m --wrap 20m`.
 
 A follow-up that refines something you just created is an `edit` to that id.
 

@@ -207,6 +207,18 @@ if [[ ! -f "$TKLR_HOME/tklr.db" ]]; then
 fi
 [[ -f "$TKLR_HOME/config.toml" ]] && ok "config.toml present" || warn "config.toml missing"
 [[ -f "$TKLR_HOME/tklr.db" ]]     && ok "tklr.db present"     || warn "tklr.db missing"
+# tklr defaults to 24-hour lists. This skill speaks 12-hour with am/pm.
+if [[ -f "$TKLR_HOME/config.toml" ]]; then
+    python3 - "$TKLR_HOME/config.toml" <<'PY'
+from pathlib import Path
+import re, sys
+p = Path(sys.argv[1])
+text = p.read_text(encoding="utf-8")
+new, n = re.subn(r"^ampm\s*=\s*false\s*$", "ampm = true", text, count=1, flags=re.M)
+if n:
+    p.write_text(new, encoding="utf-8")
+PY
+fi
 
 # ------------------------------------------------------------ 3. dispatcher
 step "dispatcher in $HERMES_SCRIPTS"

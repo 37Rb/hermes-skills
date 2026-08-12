@@ -86,8 +86,8 @@ If what the header resolved isn't what the user meant, say so and re-run with
 `--date`, rather than quietly answering about a different day.
 
 Every timed row carries its own alert in brackets, already converted to a
-clock time: `event: 8-9:00 Call with Alarm.com (3) [alert 7:30]`. Quote that
-time.
+clock time: `event: 8-9am Call with Alarm.com (3) [alert 7:30am]`. Times are
+12-hour with am/pm. Quote that time.
 Do not work it out from an offset you remember setting earlier in the
 conversation, and do not carry one item's offset across to another: a list is
 the only place the alerts for a day appear side by side, and reminders on one
@@ -128,12 +128,12 @@ python3 $R --type event --subject "Coffee with Sam" --when "tomorrow 11:30" \
 ```
 created id 1:
   event: Coffee with Sam
-    when: 2026-08-01 11:30
+    when: Saturday, August 1, 2026 at 11:30am
     lasts: 45 minutes
     for: alex
     alerts: 1 hour and 15 minutes before, on channel r
-  alert (1h before) fires 2026-08-01 10:30 — in 12 hours
-  alert (15m before) fires 2026-08-01 11:15 — in 12 hours 45 min
+  alert (1h before) fires 2026-08-01 10:30am — in 12 hours
+  alert (15m before) fires 2026-08-01 11:15am — in 12 hours 45 min
 ```
 
 Named fields instead of sigils, and it does the whole chain in one call:
@@ -152,6 +152,18 @@ yourself -- an offset counts backwards from the start, so any offset you guess
 moves the ping off the time they asked for. Measured twice on 2026-08-11 -- once by leaving `--alert`
 off and letting the default fill in an hour, once by passing `--alert 1h`
 outright -- and both times a request for 7pm produced a notification at 6pm.
+
+**Drive time is `--wrap` on that same event.** "20 minute drive each way",
+"across town", "hold half an hour either side", "leave 20 minutes early" are
+not a second reminder and not a time to subtract from `--when`. They are
+`--wrap 20m` (one value for both sides) or `--wrap 30m,15m` (before, after).
+`--when` is still when the thing starts; `--duration` is still how long the
+thing lasts. Measured on 2026-08-12: "chess club starts at 5:30 and ends at 8,
+20 minute drive each way" became two events — the club at 5:30, and a
+five-minute "Leave for chess club" at 5:10 — with no wrap on either. The
+right command is one event: `--when 5:30pm --duration 2h30m --wrap 20m`.
+The blocked window is then 5:10–8:20; the club is still 5:30–8. A follow-up
+that adds drive time is `edit <id> --wrap 20m`, not another `add`.
 
 **A jot is time you want counted.** `uses` totals jots by category and month,
 and nothing in your own memory can add up, so that is the whole reason the type
@@ -182,7 +194,7 @@ to take on trust.
 | `--repeat` | how often, in words: `"weekdays"`, `"last day of the month"` — see below |
 | `--link` | a url or file path, e.g. a meeting link |
 | `--offset` | for tasks: reschedule this long **after completion**, e.g. `3d` |
-| `--travel` | travel held either side: `30m` or `30m,15m` (before,after) |
+| `--wrap` | wrap before and after the event: `30m` or `30m,15m` (before, after) |
 | `--timezone` | zone for `--when`, e.g. `US/Pacific`, or `none` to float |
 | `--use` | jots only: time-tracking category, e.g. `exercise.walking` |
 | `--target` | goal target, e.g. `3/1w` |
@@ -284,7 +296,8 @@ All verified against the engine (tklr 1.0.43). `R` is `scripts/tklr_agent_wrappe
 | "I want to exercise 3 times a week" | `--type goal --subject Exercise --when 2026-08-01 --target 3/1w --for alex` |
 | "Lunch with Priya at Cafe Ambrosia Tuesday noon" | `--type event --subject "Lunch with Priya" --when "tuesday noon" --duration 1h --location "Cafe Ambrosia" --for alex --alert 30m --via r` |
 | "Flight at 3pm Pacific on the 10th" | `--type event --subject "Flight to Seattle" --when "2026-08-10 3pm" --timezone US/Pacific --duration 5h --for alex --alert 3h --via r` |
-| "Team meeting at 2, 30 min travel each way" | `--type event --subject "Team meeting" --when "2026-08-06 2pm" --duration 1h --travel "30m,30m" --for alex --alert 1h --via r` |
+| "Team meeting at 2, 30 min travel each way" | `--type event --subject "Team meeting" --when "2026-08-06 2pm" --duration 1h --wrap "30m,30m" --for alex --alert 1h --via r` |
+| "Taking the kids to chess club, 5:30 to 8, 20 minute drive each way" | one event, not a second "leave for" event: `--type event --subject "Chess club" --when "5:30pm" --duration 2h30m --wrap 20m --for alex` |
 | "Note: Sam prefers morning meetings" | `--type note --subject "Sam prefers morning meetings" --for alex` |
 | "Jot down that I am taking a walk" | `--type jot --subject "Taking a walk" --for alex` (timestamped now; pass `--when` for a different time) |
 | "That walk took an hour and a quarter, count it as exercise" | this follows the row above, so it edits that jot rather than filing a second one: `edit <id> --duration 1h15m --use exercise.walking` |
@@ -313,9 +326,9 @@ go and fetch:
 ```
 $ python3 $R find dentist
 Today is Monday, August 10, 2026.
-* Dentist checkup (id 1) [next Friday, August 14, 2026 at 9:00] [alert 8:00]
-* Dentist follow-up (id 2) [next Monday, September 7, 2026 at 9:00] [alert 8:00]
-* Dentist for Jordan (id 3) [last was Tuesday, July 28, 2026 at 16:00] [alert 15:30]
+* Dentist checkup (id 1) [next Friday, August 14, 2026 at 9am] [alert 8am]
+* Dentist follow-up (id 2) [next Monday, September 7, 2026 at 9am] [alert 8am]
+* Dentist for Jordan (id 3) [last was Tuesday, July 28, 2026 at 4pm] [alert 3:30pm]
 ~ Call dentist about insurance (id 4)      ← a task, so no occurrence to show
 ```
 
@@ -341,9 +354,9 @@ rules out the task.
 occurrence and its alert, which is usually enough to tell them apart:
 
 ```
-event: Dentist checkup (1) [next Friday, August 7, 2026 at 15:00] [alert 14:00]
-event: Dentist follow-up (2) [next Friday, September 11, 2026 at 10:00] [alert 9:00]
-event: Dentist for Jordan (3) [next Friday, August 7, 2026 at 9:00] [alert 8:00]
+event: Dentist checkup (1) [next Friday, August 7, 2026 at 3pm] [alert 2pm]
+event: Dentist follow-up (2) [next Friday, September 11, 2026 at 10am] [alert 9am]
+event: Dentist for Jordan (3) [next Friday, August 7, 2026 at 9am] [alert 8am]
 ```
 
 `$R show <id>` gives one of them in full, including who it is for. When the
@@ -368,7 +381,7 @@ python3 $M delete 42 --dry-run
 WOULD delete the ENTIRE reminder, including every occurrence
   id 42: 'Dentist checkup'
   event: Dentist checkup
-    when: 2026-08-07 15:00
+    when: Friday, August 7, 2026 at 3pm
     lasts: 1 hour
     for: alex
     alerts: 1 day before, on channel r
@@ -421,6 +434,7 @@ underneath and is documented further down for reading, not for calling.
 | "Move just next Monday's standup to Tuesday" | `$R move <id> --instance '<that occurrence>' --to 'tuesday 9am'` — one occurrence of a **repeating** reminder only. It becomes a separate reminder; say so if the user would notice |
 | "Also send it to my email" | `$R edit <id> --via r,e` |
 | "Make it an hour instead of 30 minutes" | `$R edit <id> --duration 1h` |
+| "It's a 20 minute drive each way" | `$R edit <id> --wrap 20m` — on that event, never a second "leave for" event |
 | "Call it 'Dentist checkup' instead" | `$R edit <id> --subject 'Dentist checkup'` |
 | "Remind me a day ahead as well" | `$R edit <id> --alert 1d,1h` |
 | "Drop the reminder, keep the appointment" | `$R edit <id> --clear alerts` |
@@ -446,8 +460,8 @@ does.
 | `--alert` / `--via` | offsets and channels; see below |
 | `--for` | who it is for, replacing the current people |
 | `--use` | jots only: the time-tracking category. This is the half of a jot that arrives late, once the thing being logged is over |
-| `--note`, `--location`, `--priority`, `--notice`, `--offset`, `--travel`, `--repeat` | that field |
-| `--clear <field,…>` | removes fields entirely: `duration`, `repeat`, `location`, `priority`, `notice`, `offset`, `travel`, `note`, `people`, `alerts`, `use` |
+| `--note`, `--location`, `--priority`, `--notice`, `--offset`, `--wrap`, `--repeat` | that field |
+| `--clear <field,…>` | removes fields entirely: `duration`, `repeat`, `location`, `priority`, `notice`, `offset`, `wrap`, `note`, `people`, `alerts`, `use` |
 | `--dry-run` | prints the before and after entry, changes nothing |
 
 **`--alert` and `--via` carry the other half over.** `--via r,e` alone keeps the

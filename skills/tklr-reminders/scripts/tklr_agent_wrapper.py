@@ -1284,12 +1284,19 @@ def period_in_words(text: str) -> str:
 def alerts_in_words(value: str) -> str:
     """`45m, 1d: r, e` as `45 minutes and 1 day before, on channels r and e`."""
     offsets, _, letters = value.partition(":")
-    said = join_words([period_in_words(o) for o in offsets.split(",") if o.strip()])
+    parts = [o for o in offsets.split(",") if o.strip()]
     chans = join_words([l.strip() for l in letters.split(",") if l.strip()])
+    # A zero offset fires AT the start, and "0 minutes before" is precisely the
+    # phrasing that makes people read it as an hour early. Say what it does.
+    if parts and all(not any(int(n) for n, _ in re.findall(r"(\d+)([wdhms])", o))
+                     for o in parts):
+        said = "at the time it starts"
+    else:
+        said = join_words([period_in_words(o) for o in parts]) + " before"
     if not chans:
-        return f"{said} before, but NO channel, so this notifies nobody"
+        return f"{said}, but NO channel, so this notifies nobody"
     plural = "s" if "," in letters or " and " in chans else ""
-    return f"{said} before, on channel{plural} {chans}"
+    return f"{said}, on channel{plural} {chans}"
 
 
 def entry_in_words(entry: str) -> list[str]:

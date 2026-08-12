@@ -143,6 +143,15 @@ assembles the tokens, validates before writing, reads what the write actually
 reported, confirms the record is not a draft, heals derived state, and prints
 when each alert will fire.
 
+**Work out whether the time they said is when the THING happens or when they
+want the PING.** "Dentist at 3, remind me an hour before" names the event, so the
+offset is `1h`. "Remind me at 7pm to put the bins out" names the notification,
+and there is no separate event time at all, so it is `--when "…7pm" --alert 0m`:
+an offset counts backwards from the start, so anything else moves the ping off
+the time they asked for. Measured twice on 2026-08-11 -- once by leaving `--alert`
+off and letting the default fill in an hour, once by passing `--alert 1h`
+outright -- and both times a request for 7pm produced a notification at 6pm.
+
 **A jot is time you want counted.** `uses` totals jots by category and month,
 and nothing in your own memory can add up, so that is the whole reason the type
 exists. A request with no duration and no category is not a jot however it was
@@ -165,7 +174,7 @@ to take on trust.
 | `--when` | `"tomorrow 3pm"`, `"friday"`, `"in 2 hours"`, `"2026-08-15 09:00"` |
 | `--duration` | `30m`, `1h`, `1h30m` |
 | `--for` | comma-separated people — `alex` or `alex,jordan` |
-| `--alert` | offsets **before** the start: `1d,1h,15m` |
+| `--alert` | offsets **before** the start: `1d,1h,15m`. `0m` fires AT the start — see below |
 | `--via` | channel letters: `r`, or `r,e` |
 | `--note` `--location` `--priority` `--notice` | extra detail, place, 1–5, early warning |
 | `--repeat` | how often, in words: `"weekdays"`, `"last day of the month"` — see below |
@@ -257,6 +266,7 @@ All verified against the engine (tklr 1.0.43). `R` is `scripts/tklr_agent_wrappe
 | Request | Command |
 |---------|---------|
 | "Dentist Friday at 3, remind me a day and an hour before" | `--type event --subject Dentist --when "friday 3pm" --duration 1h --for alex --alert 1d,1h --via r` |
+| "Put the bins out at 7pm on Tuesdays, remind me at 7" | the 7pm is when they want the ping, so the offset is zero: `--type task --subject "Put bins out" --when "tuesday 7pm" --repeat "Tuesdays" --for alex --alert 0m --via r` |
 | "Coffee with Sam tomorrow 11:30" | `--type event --subject "Coffee with Sam" --when "tomorrow 11:30" --duration 45m --for alex --alert 15m --via r` |
 | "Standup every weekday at 9" | `--type event --subject Standup --when "2026-08-03 9am" --duration 30m --repeat "weekdays" --for alex --alert 10m --via r` |
 | "Pay the mortgage on the 1st every month" | `--type task --subject "Pay mortgage" --when 2026-08-01 --repeat "monthly" --priority 1 --for alex --alert 1d --via r,e` |

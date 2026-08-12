@@ -1050,6 +1050,24 @@ def build_entry(args, home: Path, now: datetime) -> tuple[str, str | None, bool]
         parts.append(f"@s {resolved}")
     elif args.type in ("event", "goal"):
         die(f"a {args.type} needs --when")
+
+    # A goal with no target, and a project with no steps, are both stored as
+    # DRAFTS by the engine while it reports success -- a record that appears in a
+    # search looking real and fires nothing. Measured 2026-08-11: asked for a
+    # reading goal, an agent spent 292 seconds and left two of them behind.
+    # Refused here instead, because the missing piece is the thing that makes the
+    # type mean anything, and a refusal that names it costs one command.
+    if args.type == "goal" and not args.target:
+        die("a goal needs --target, or the store keeps it as a draft that "
+            "never fires",
+            "--target is how many completions per how long: --target 12/52w "
+            "for twelve in a year, --target 3/1w for three a week.")
+    if args.type == "project" and not getattr(args, "step", None):
+        die("a project needs at least one --step, or the store keeps it as a "
+            "draft that never fires",
+            "Give the steps in order: --step \"Order timber\" --step \"Strip "
+            "deck\" --step \"Apply stain\".",
+            "If there are no steps yet, a task is the better type.")
     elif args.timezone:
         die("--timezone only means something with --when")
 
@@ -1304,7 +1322,12 @@ def show_output(proc: subprocess.CompletedProcess[str]) -> None:
 # swallowed into the alert above it and printed as part of it. A skipped
 # occurrence is exactly what someone asks about after saying "we are away
 # that week", so it is also the wrong thing to lose.
-ENTRY_TOKENS = re.compile(r"@([a-zA-Z+-])\s+(.*?)(?=\s+@[a-zA-Z+-]\s|$)")
+# `~` belongs in here too: it is a project STEP. Left out, the same failure
+# as `@-` before it -- the lookahead could not see where the previous token
+# ended, so three steps were swallowed into the `for:` line and printed as
+# `for: ryan @~ Order timber &r a @~ Strip deck &r b:a ...`. A project
+# whose steps are invisible in `show` is a project nobody can work.
+ENTRY_TOKENS = re.compile(r"@([a-zA-Z+~-])\s+(.*?)(?=\s+@[a-zA-Z+~-]\s|$)")
 ENTRY_START = re.compile(r"^([*~^%!\-?])\s+(.*)$")
 
 # Label, and how much detail is worth a line of its own.
@@ -1313,6 +1336,7 @@ TOKEN_LABELS = {
     "d": "note", "l": "location", "g": "link", "p": "priority",
     "n": "warn from", "o": "then again after", "w": "travel", "t": "target",
     "u": "counts toward", "+": "extra dates", "-": "skipped dates",
+    "~": "step",
 }
 PERIOD_WORDS = {"w": "week", "d": "day", "h": "hour", "m": "minute", "s": "second"}
 
@@ -1363,6 +1387,34 @@ def stamp_in_words(stamp: str) -> str:
     return f"{said} at {hh}:{mm}" if hh else said
 
 
+# A project step is stored as `@~ Strip deck &r b:a`: the text, then a label for
+# this step and the labels it waits on. Printed raw that is three characters of
+# dependency grammar in the middle of a sentence, and the reader has to know that
+# `b:a` means "this is b, and it needs a first". Resolved to names here, because
+# the only useful form of a dependency is the name of what you are waiting for.
+STEP_LABEL = re.compile(r"\s*&r\s+([A-Za-z0-9]+)(?::([A-Za-z0-9,]+))?\s*$")
+
+
+def steps_in_words(raw_steps: list[str]) -> list[str]:
+    named, order = {}, []
+    for raw in raw_steps:
+        hit = STEP_LABEL.search(raw)
+        text = raw[:hit.start()].strip() if hit else raw.strip()
+        label = hit.group(1) if hit else ""
+        needs = [x for x in (hit.group(2) or "").split(",") if x] if hit else []
+        if label:
+            named[label] = text
+        order.append((text, needs))
+    said = []
+    for text, needs in order:
+        if needs:
+            waits = join_words([named.get(n, n) for n in needs])
+            said.append(f"{text} (after {waits})")
+        else:
+            said.append(text)
+    return said
+
+
 def entry_in_words(entry: str) -> list[str]:
     """A stored entry as labelled English lines, with no tklr syntax in them.
 
@@ -1379,11 +1431,15 @@ def entry_in_words(entry: str) -> list[str]:
     subject = (rest if first < 0 else rest[:first]).strip()
     lines = [f"{kind}: {subject}"]
     unknown = 0
+    raw_steps: list[str] = []
     for key, value in ENTRY_TOKENS.findall(rest):
         value = value.strip()
         label = TOKEN_LABELS.get(key)
         if label is None:
             unknown += 1
+            continue
+        if key == "~":
+            raw_steps.append(value)
             continue
         if key == "r":
             value = recurrence_in_words(value)
@@ -1403,6 +1459,8 @@ def entry_in_words(entry: str) -> list[str]:
             # answer to "which week are we skipping".
             value = join_words([stamp_in_words(v) for v in value.split(",")])
         lines.append(f"  {label}: {value}")
+    for n, step in enumerate(steps_in_words(raw_steps), 1):
+        lines.append(f"  step {n}: {step}")
     if unknown:
         lines.append(f"  ({unknown} further stored field(s) this wrapper does "
                      f"not describe)")
@@ -1928,8 +1986,23 @@ def cmd_find(args, home: Path, now: datetime) -> int:
     else:
         found = run_tklr(home, "find", args.text)
     print(f"Today is {spelled_date(now.date())}.")
-    for line in rows_say_the_type(annotate_found(clean_lines(found), home, now)):
+    raw = clean_lines(found)
+    # Counted BEFORE annotation: FOUND_ID anchors the id at the end of the line,
+    # and an annotated row ends with its next occurrence instead.
+    hits = sum(1 for line in raw if FOUND_ID.search(line))
+    shown = rows_say_the_type(annotate_found(raw, home, now))
+    for line in shown:
         print(line)
+    # More than one hit is the moment a destructive request becomes a guess.
+    # Measured 2026-08-11: asked to "cancel the dentist" with two dentist
+    # records in the store, an agent deleted one and mentioned the other in the
+    # same reply, without ever asking which was meant. Delete and move cannot be
+    # undone, so the ambiguity is called out where it is visible rather than left
+    # for the caller to notice.
+    if hits > 1:
+        print(f"  {hits} matched. Before deleting or moving anything, say which "
+              f"one you mean and let them pick — these cannot be undone. For "
+              f"reading them back, quoting both is fine.")
     return 0
 
 
@@ -3887,8 +3960,18 @@ def cmd_add(args, home: Path, now: datetime) -> int:
     except sqlite3.Error:
         row = None
     if row and row[1] == "?":
-        die(f"it was stored as a DRAFT (id {row[0]}) and will never fire",
-            f"Inspect with: {sys.argv[0]} show {row[0]}")
+        # Remove it. A draft fires nothing and appears on no schedule, but it
+        # DOES appear in a search looking like a real reminder -- the one record
+        # shape most likely to be read back to someone as confirmation. Leaving
+        # it behind meant a failed add still changed the store: measured
+        # 2026-08-11, two identical drafts from two attempts at one goal, both
+        # left in place by the error that caught them.
+        removed = delete_record(home, row[0])
+        die(f"it was stored as a DRAFT and would never have fired, so it was "
+            f"{'removed again' if removed else 'left in place (removal failed)'}",
+            "That happens when the subject carries an entry rather than words: "
+            "pass the text alone in --subject and say the type with --type.",
+            f"Try again with: {sys.argv[0]} add --type <type> --subject <words>")
 
     print(f"created id {row[0] if row else '?'}:")
     for said in entry_in_words(entry):
@@ -3897,6 +3980,18 @@ def cmd_add(args, home: Path, now: datetime) -> int:
     if row:
         verify_scheduled(home, row[0], entry, resolved, now, heal_failed)
     return 0
+
+
+
+def delete_record(home: Path, rid: int) -> bool:
+    """Remove one record outright. True if it is gone afterwards."""
+    proc = subprocess.run(
+        [sys.executable, str(SKILL_SCRIPTS / "tklr_mutate.py"),
+         "--home", str(home), "delete", str(rid)],
+        capture_output=True, text=True)
+    if proc.returncode != 0:
+        return False
+    return not record_entry(home, rid)
 
 
 def verify_scheduled(home: Path, record_id: int, entry: str, resolved: str | None,

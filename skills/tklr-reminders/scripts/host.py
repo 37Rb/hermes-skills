@@ -355,7 +355,7 @@ def alias_target(name: str = ALIAS_NAME) -> str | None:
 
     None means the name is free. Any other string means it is taken -- by this
     skill on an earlier run, or by something else entirely -- and either way it
-    is not ours to claim, so callers offer nothing.
+    is not ours to claim, so callers leave it alone.
 
     A host that cannot answer should return the skill's own name rather than
     None: an unanswerable question must not read as a free name, or the offer
@@ -422,3 +422,14 @@ def alias_pending(name: str = ALIAS_NAME) -> str:
         return ""
     return (f"'{name}' is written, but this config is only read at startup, so "
             f"the user has to {RESTART_PHRASE} themselves before it works.")
+
+
+def alias_restart_command() -> str:
+    """The command the user runs to make a just-registered shortcut live.
+
+    Empty if a port's shortcut takes effect immediately. The config-set
+    commands are the agent's to run; this is the one thing that stays theirs.
+    """
+    if not RESTART_PHRASE:
+        return ""
+    return f"{HOST_CLI} gateway restart"

@@ -120,8 +120,9 @@ your own instructions name it — "You are on a text messaging communication
 platform, Telegram", "You are chatting inside the Hermes desktop app". Read it
 off and pass it. The command installs what it needs, creates the workspace, finds that
 platform's target, writes and verifies the channel letter, schedules the
-every-minute dispatcher, and creates a test alert that fires about two minutes
-later. It is the whole setup — see *Do this now* at the end of this file.
+every-minute dispatcher, registers `/tklr`, and creates a test alert that fires
+about two minutes later. It is the whole setup — see *Do this now* at the end
+of this file.
 
 Do **not** ask the user which channel they want, and do **not** read
 `hermes send --list` top to bottom and pick. That list prints every platform
@@ -148,11 +149,13 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
 ## Ground rules
 
 1. **Do the work yourself. Never hand the user a command to run or a file to
-   edit.** You run `setup`, you inspect what exists, you write `config.toml`,
-   you create the cron job. If you catch yourself typing "you need to run…",
-   stop and run it. **Offering counts as handing it over** — "would you like me
-   to set this up?" is the same failure wearing a politer hat. Nothing in setup
-   is destructive or ambiguous.
+   edit** — except the gateway restart already printed in a
+   `SEND EXACTLY THIS` block; that is theirs, send it. You run `setup`, you
+   inspect what exists, you write `config.toml`, you create the cron job, you
+   register `/tklr`. If you catch yourself typing "you need to run…", stop and
+   run it. **Offering counts as handing it over** — "would you like me to set
+   this up?" is the same failure wearing a politer hat. Nothing in setup is
+   destructive or ambiguous.
 
    Don't open with an inventory either. The skill's file list, script names and
    install internals are not news the user asked for. "Not set up yet — doing
@@ -237,11 +240,12 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
 The same applies mid-setup: `setup`, `email` and `channels --set` each end with a
 `SEND EXACTLY THIS TO THE USER` block. Send it.
 
-**The hard test: your reply to the user contains no commands.** Before sending
-anything that describes this skill, scan it. If it contains `python3`,
-`tklr_agent_wrapper.py`, `$R`, a `--flag`, a file path, or a fenced code block,
-it is wrong — delete it and send `welcome`'s output instead. There is no version
-of "here's the template, fill in the subject" that is acceptable.
+**The hard test: your reply to the user contains no commands you wrote.** The
+setup block and `welcome` may already include `/tklr` and the gateway restart;
+those are theirs, send them. If you add `python3`, `tklr_agent_wrapper.py`,
+`$R`, a `--flag`, a file path, or a fenced code block that was not in the
+block, it is wrong — delete it and send `welcome`'s output instead. There is
+no version of "here's the template, fill in the subject" that is acceptable.
 
 **When they ask for examples suited to them**, the answer is still `welcome`'s
 shape, in their subject matter, phrased as things they can *say*: "remind me to
@@ -321,8 +325,9 @@ python3 ${HERMES_SKILL_DIR}/scripts/tklr_agent_wrapper.py setup --platform <plat
 
 It does the whole job in one call: installs what it needs, creates the workspace,
 installs the dispatcher, writes the alert channel, creates the every-minute
-cron job, and creates a test reminder whose alert fires about three minutes
-later. It is idempotent, so run it even if you think setup is already done.
+cron job, registers `/tklr`, and creates a test reminder whose alert fires about
+three minutes later. It is idempotent, so run it even if you think setup is
+already done.
 
 The platform is the one this conversation is on — your own instructions name
 it. Do not ask the user, and do not pick from `hermes send --list`. Never guess
@@ -338,10 +343,11 @@ Then, and only then:
 
 1. **Send the `SEND EXACTLY THIS TO THE USER` block `setup` ends with, and
    nothing else.** It already asks about the test alert, offers the channels
-   that have no letter yet, and offers a short name for the skill if one is
-   free — the things this moment is for. `setup` created the test alert; do not
-   create another. **Setup counts as complete only once they confirm one
-   reached them, so wait for that before saying it worked.**
+   that have no letter yet, and tells them to restart the gateway so `/tklr`
+   works — the things this moment is for. `setup` created the test alert and
+   registered `/tklr`; do not create another test, and do not restart anything
+   yourself. **Setup counts as complete only once they confirm one reached
+   them, so wait for that before saying it worked.**
 
    Every command that ends in a message prints one of these blocks. Everything
    above the line is working notes, yours and not theirs.
@@ -360,15 +366,15 @@ Then, and only then:
    is supported and needs one; send that rather than dropping it. Other routes
    are added with the `channels --set` command printed beside each one.
 
-   If they accepted the short name, `python3 $R shortcut` registers it. Send the
-   block it prints; the restart it names is the user's to run.
+   Setup already registered `/tklr`. The block tells them to restart the
+   gateway so it takes effect. Send that. Do not restart anything yourself.
 3. `welcome --no-test` prints what to tell the user, built from the channels
    that now exist — so it must run **last**, after any channel added in step 2.
    **Send its output verbatim.** It is the answer to "how do I use this", and
-   the only one: a reminder is something they *say* to you, so a reply that
-   shows them a command to type has misdescribed the whole skill. (Use plain
-   `welcome`, without `--no-test`, only if you have not already confirmed
-   delivery in step 1.)
+   the only one. It already opens with `/tklr` and the gateway restart; do not
+   strip those, and do not add wrapper commands around the examples. (Use
+   plain `welcome`, without `--no-test`, only if you have not already
+   confirmed delivery in step 1.)
 
 If the user asked for something else, a reminder or a question about their week,
 do that instead: load `references/using-the-wrapper.md` and run the command it

@@ -5,8 +5,10 @@ alerts". Load this only when setup is incomplete — `SKILL.md` says how to tell
 Once alerts are being delivered you never need this file again.
 
 **Do all of it yourself.** The user's only job is choosing which channels they
-want and confirming a test alert arrived. Discovery, config editing, the cron
-job, and verification are yours. Never hand them a command to run.
+want, confirming a test alert arrived, and restarting the gateway so `/tklr`
+works. Discovery, config editing, the cron job, the short name, and
+verification are yours. Never hand them a command to run — except the gateway
+restart, which the setup block already prints.
 
 Take the `R=` line from `SKILL.md`, where it is already resolved to a real path.
 Everything else hangs off it, so nothing below names a skill path directly:
@@ -412,21 +414,24 @@ Rules for this:
 * **The reply is the block, and only the block.** Everything the user needs is
   in it; everything else on screen is yours.
 
-## Offer the short name too
+## Tell them to restart the gateway
 
-The same blocks carry one more offer when the name is free: a shortcut for
-invoking the skill without typing its full name.
+Setup registers `/tklr` when the name is free. The same blocks then include
+the restart command so it takes effect. Send it. Do not offer, do not wait
+for a yes, and do not restart anything yourself.
+
+`$R shortcut` is only for a different short name, or if setup could not
+register this one:
 
 ```bash
-python3 $R shortcut            # the default short name
+python3 $R shortcut            # the default short name, if setup missed it
 python3 $R shortcut --name rem # if they want a different one
 ```
 
-* **Only when they ask for it.** The offer being printed does not mean run it.
-* **If it refuses**, the name belongs to something else: offer another with
-  `--name`, or drop it.
-* **Do not describe the shortcut as working, and do not restart anything.** It
-  takes effect after a restart the user runs.
+* **If it refuses**, the name belongs to something else: they pick another
+  with `--name`, or drop it.
+* **Do not describe the shortcut as working, and do not restart anything.**
+  The restart command is theirs.
 * **If it fails, say so and carry on.** Reminders are unaffected.
 
 ## Closing out setup

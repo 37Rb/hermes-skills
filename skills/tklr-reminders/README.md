@@ -197,15 +197,13 @@ That loads the skill and it takes it from there: installs tklr, creates the work
 
 ### Name (alias) the skill: `/tklr`
 
-Naming the skill is what makes it answer, and `/tklr-reminders` is too long to type many times a day, so register the short alias and use it:
+Setup registers `/tklr` as the short name. Restart the gateway so it takes effect:
 
 ```bash
-hermes config set quick_commands.tklr.type alias
-hermes config set quick_commands.tklr.target tklr-reminders
 hermes gateway restart
 ```
 
-Do this now, because everything below uses `/tklr`. The long name never stops working, so if you would rather not register anything, read `/tklr` as `/tklr-reminders` throughout. On Matrix and Slack it is `!tklr`.
+Do this now, because everything below uses `/tklr`. On Matrix and Slack it is `!tklr`.
 
 **Put the name in front of the request**, rather than sending it alone: `/tklr what's on my agenda?` or `/tklr add my dentist appointment Friday at 3`. That loads the skill and hands it the job in one message.
 

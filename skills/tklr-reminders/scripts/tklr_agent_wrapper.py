@@ -3505,30 +3505,43 @@ def offer_sentence(routes: list[Route]) -> str:
     return f"{sentence} {asks}".strip()
 
 
-def print_shortcut() -> str:
-    """Print the shortcut route for the agent; return the offer for the user.
+def print_shortcut(*, register: bool = True) -> str:
+    """Register the short name if it is free; return the restart for the user.
 
     A shortcut is not a channel, so it is not a Route: nothing is delivered to
     it and `offer_sentence` would say "I can also send them to /tklr". It gets
     its own block for the same reason the channel routes have one -- an agent
     that has just read "setup complete" does not go looking for anything, so
-    what it should offer has to arrive in output it already reads.
+    the restart the user still has to run has to arrive in output it already
+    reads.
 
-    Empty when the name is taken. Taken by us and taken by another skill are
-    the same answer to the user: nothing to offer.
+    Empty when the name is taken, when registration fails, or when a port's
+    shortcut is live immediately. Taken by us and taken by another skill are
+    the same answer to the user: nothing to say.
+
+    `register=False` is for `status`: report the gap, do not write the host
+    config as a side effect of a check.
     """
     short = host.ALIAS_NAME
     if host.alias_target() is not None:
         return ""
     print("\nA shorter way to reach this skill, not set up yet:")
     print(f"  · '{short}' as a second name for '{host.SKILL_COMMAND}'")
-    print(f"      python3 {SELF} shortcut")
-    print("      (only if they want it. It writes to the host's config, and")
-    print("       anything the USER must do afterwards is in the offer.)")
-    after = (f", though it only starts working once you {host.RESTART_PHRASE}"
-             if host.RESTART_PHRASE else "")
-    return (f"If the long name is a nuisance to type, I can register /{short} "
-            f"as a shortcut for it{after} — say the word and I will.")
+    if not register:
+        print(f"      python3 {SELF} shortcut")
+        print("      Run it. Do not offer, do not wait for a yes.")
+        return ""
+    ok, note = host.create_alias(short)
+    print(f"      {note}")
+    if not ok:
+        print("      Reminders are unaffected. Carry on.")
+        return ""
+    restart = host.alias_restart_command()
+    if not restart:
+        return ""
+    print("      The restart command is in the user block. Send it.")
+    print("      Do not restart anything yourself.")
+    return f"Restart the gateway so /{short} works:\n\n{restart}"
 
 
 def channels_phrase(home: Path) -> str:
@@ -3542,12 +3555,11 @@ def channels_phrase(home: Path) -> str:
 
 
 RELAY_RULE = (
-    "Nothing above the line is for the user. If what you send contains "
-    "`tklr`\nanywhere except immediately after a `/`, or contains `python3`, a "
-    "`--flag`, an\n`@` token or a code fence, you have written the wrong thing. "
-    "A `/shortcut` is\nthe one thing they ever type; everything else they say "
-    "in words, and you\ncompose the command. When they ask how to use this, the "
-    "answer comes from\n`welcome`, not from you.")
+    "Nothing above the line is for the user. Send the block exactly as printed,\n"
+    "including any commands it contains — those are theirs to run. If you add\n"
+    "`python3`, a `--flag`, an `@` token, a code fence, or a `tklr` that was\n"
+    "not already in the block, you have written the wrong thing. When they ask\n"
+    "how to use this, the answer comes from `welcome`, not from you.")
 
 
 def print_relay(*paragraphs: str) -> None:
@@ -3566,7 +3578,13 @@ def print_relay(*paragraphs: str) -> None:
     print(f"\n{rule}\nSEND EXACTLY THIS TO THE USER AS YOUR WHOLE REPLY —\n"
           f"no sentence before it, none after it:\n{rule}")
     for para in paragraphs:
-        if para:
+        if not para:
+            continue
+        stripped = para.strip()
+        # Command lists keep their line breaks; prose is rewrapped.
+        if "\n" in stripped:
+            print(stripped + "\n")
+        else:
             print(textwrap.fill(" ".join(para.split()), width=72) + "\n")
     print(f"{rule}\n{RELAY_RULE}")
 
@@ -3667,11 +3685,11 @@ def print_added_relay(home: Path, added: str, tested: bool,
 def cmd_shortcut(args, home: Path, now: datetime) -> int:
     """Register a short second name for this skill on the host.
 
-    Deliberately a command of its own rather than a step inside `setup`: it
-    changes the host's configuration rather than the skill's, it is worth
-    nothing to a user who never types the long name, and it cannot be undone
-    by `reset.sh` on a machine where the user has since pointed the same name
-    somewhere else. Offered everywhere, run only when asked.
+    Setup already registers the default name. This is for a different one, or
+    for a machine whose setup ran before that step existed. It changes the
+    host's configuration rather than the skill's, and it cannot be undone by
+    `reset.sh` on a machine where the user has since pointed the same name
+    somewhere else.
     """
     short = args.name.strip().lstrip("/")
     if not short:
@@ -3699,12 +3717,9 @@ def cmd_shortcut(args, home: Path, now: datetime) -> int:
     pending = host.alias_pending(short)
     if pending:
         print(f"  note: {pending}")
-    if host.RESTART_PHRASE:
-        print_relay(
-            f"Done — /{short} now points at this skill. It will not do anything "
-            f"until you {host.RESTART_PHRASE}, though, since that config is "
-            f"only read at startup. Do that whenever suits you and /{short} "
-            "will work from then on.")
+    restart = host.alias_restart_command()
+    if restart:
+        print_relay(f"Restart the gateway so /{short} works:\n\n{restart}")
     else:
         print_relay(f"Done — you can now reach me with /{short}.")
     return 0
@@ -3742,8 +3757,32 @@ def describe_channels(letters: dict[str, str]) -> list[str]:
     return unique
 
 
+def welcome_lead() -> str:
+    """How to invoke the skill, and the restart if /tklr is not live yet.
+
+    This is the first thing welcome says. A bare "just talk to me" is how
+    people skip the prefix, the skill never loads, and the request never
+    reaches a command.
+    """
+    short = host.ALIAS_NAME
+    long_name = host.SKILL_COMMAND
+    if host.alias_target() == long_name:
+        prefix = f"/{short}"
+        lead = (f"Use {prefix} each time you want this skill. Put it in front "
+                f"of the request — \"{prefix} what's on today\", not a bare "
+                "question.")
+        restart = host.alias_restart_command()
+        if restart:
+            lead += (f" If you haven't restarted the gateway yet, do that "
+                     f"first so {prefix} will work:\n\n{restart}")
+        return lead
+    prefix = f"/{long_name}"
+    return (f"Use {prefix} each time you want this skill. Put it in front of "
+            f"the request — \"{prefix} what's on today\", not a bare question.")
+
+
 WELCOME = """\
-You're all set — just talk to me normally about anything time-related.
+{lead}
 
 **Appointments and events.** "Dentist Friday at 3 for an hour." "Coffee with
 Sam tomorrow at 11:30." All-day things work too — "{who}'s birthday on August
@@ -3831,7 +3870,8 @@ def cmd_welcome(args, home: Path, now: datetime) -> int:
         channels_text = ", ".join(channels[:-1]) + f" and {channels[-1]}"
     else:
         channels_text = channels[0]
-    text = WELCOME.format(who=args.who or "Jordan", channels=channels_text)
+    text = WELCOME.format(who=args.who or "Jordan", channels=channels_text,
+                          lead=welcome_lead())
     # The flag alone is not enough to make the claim. `welcome` sends nothing;
     # the test it refers to is the one `setup` created moments earlier, so the
     # sentence is only true when that record actually exists. Its default is to
@@ -3842,11 +3882,17 @@ def cmd_welcome(args, home: Path, now: datetime) -> int:
         text += TEST_LINE
     # Re-wrap per paragraph: the channel list is variable-length, so the
     # template's own line breaks land wherever. Chat clients re-wrap anyway;
-    # this keeps the plain-text form readable when they don't.
+    # this keeps the plain-text form readable when they don't. Command lines
+    # (the gateway restart) keep their breaks.
     import textwrap
-    print("\n\n".join(
-        textwrap.fill(" ".join(para.split()), width=78)
-        for para in text.strip().split("\n\n")))
+    paragraphs = []
+    for para in text.strip().split("\n\n"):
+        stripped = para.strip()
+        if "\n" in stripped:
+            paragraphs.append(stripped)
+        else:
+            paragraphs.append(textwrap.fill(" ".join(para.split()), width=78))
+    print("\n\n".join(paragraphs))
     return 0
 
 
@@ -3965,7 +4011,7 @@ def cmd_status(args, home: Path, now: datetime) -> int:
         routes = print_routes(home, args.email)
         say = " ".join(x for x in (offer_sentence(routes),
                                    email_unavailable(home),
-                                   print_shortcut()) if x)
+                                   print_shortcut(register=False)) if x)
         if say:
             print(f"\nWorth saying next time you speak to the user:\n  \"{say}\"")
     return 0
@@ -4633,9 +4679,10 @@ def main() -> int:
             "skill's or the store's: nothing about reminders, channels or delivery\n"
             "is affected, and removing it later is a host matter too.\n"
             "\n"
-            "Run this only when the user has asked for it. It refuses a name\n"
-            "that already resolves to anything else, and the new name does not\n"
-            "work until the user restarts the gateway themselves."),
+            "Setup already registers the default name. Use this for a different\n"
+            "one, or if setup could not. It refuses a name that already resolves\n"
+            "to anything else, and the new name does not work until the user\n"
+            "restarts the gateway themselves."),
         epilog=("examples:\n"
                 "  %(prog)s                short name 'tklr'\n"
                 "  %(prog)s --name rem     some other short name\n"))

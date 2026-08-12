@@ -4017,8 +4017,62 @@ EMAIL_HELP = ("their email address, if you already know it — from memory or "
               "it for confirmation instead of asking for it. Never guess one.")
 
 
+# argparse answers a wrong flag with "unrecognized arguments: --all" and stops.
+# That is the end of the road: nothing in it says what this subcommand DOES
+# take, so the next attempt is another guess. Collected from drives on
+# 2026-08-11: `--all`, `--category`, `--week-start`, `--next-week`, `--every=`,
+# `--at=`, `--name`, `--reminder`, free text where a flag belonged, and
+# `--via r e` -- a list written with a space, where the leftover `e` was reported
+# as an unrecognized argument with no hint that lists are comma-separated.
+#
+# The `--use on a task` refusal is the model for this: name the mistake, then
+# name the way out. That one turned a wrong command into a right one in a single
+# step, twice, in the same drives.
+class GuidedParser(argparse.ArgumentParser):
+    def error(self, message: str):
+        sys.stdout.flush()
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: error: {message}", file=sys.stderr)
+        for line in self._guidance(message):
+            print(f"  {line}", file=sys.stderr)
+        raise SystemExit(2)
+
+    def _guidance(self, message: str) -> list[str]:
+        leftover = message.split(":", 1)[1].strip() if ":" in message else ""
+        # A leftover flag is reported by the TOP-LEVEL parser, after the
+        # subcommand has already been parsed, so `self` here is the wrapper and
+        # not `list`. Listing the wrapper's one option would answer a question
+        # nobody asked, so the subcommand actually on the command line is found
+        # and its flags are the ones named.
+        target = self
+        chosen = ""
+        subs = getattr(self, "_guided_sub", None)
+        if subs is not None:
+            for token in sys.argv[1:]:
+                if token in subs.choices:
+                    target, chosen = subs.choices[token], token
+                    break
+        flags = [s for a in target._actions for s in a.option_strings
+                 if s.startswith("--") and s != "--help"]
+        said = []
+        if "unrecognized arguments" in message:
+            first = leftover.split()[0] if leftover.split() else ""
+            if not first.startswith("-") and len(leftover.split()) == 1:
+                said.append("A list value is comma-separated, with no spaces: "
+                            "--via r,e and --alert 1d,1h, not --via r e.")
+            elif not first.startswith("-"):
+                said.append("Values go in named flags, not loose on the line: "
+                            '--subject "Put bins out" --when "tuesday 7pm".')
+            if flags:
+                name = chosen or self.prog.split()[-1]
+                said.append(f"{name} takes: {', '.join(sorted(set(flags)))}")
+        if chosen == "list" or self.prog.endswith("list"):
+            said.append("For where TIME went, that is a different subcommand: `uses`.")
+        return said
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(
+    ap = GuidedParser(
         prog="tklr_agent_wrapper.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
@@ -4056,7 +4110,9 @@ def main() -> int:
             "\n"
             "exit codes: 0 success, 1 refused or failed, 2 usage error.\n"))
     ap.add_argument("--home", help="workspace directory (default $TKLR_HOME or ~/.config/tklr)")
-    sub = ap.add_subparsers(dest="cmd", required=True, metavar="<subcommand>")
+    sub = ap.add_subparsers(dest="cmd", required=True, metavar="<subcommand>",
+                            parser_class=GuidedParser)
+    ap._guided_sub = sub
 
     a = sub.add_parser(
         "add", help="create a reminder",

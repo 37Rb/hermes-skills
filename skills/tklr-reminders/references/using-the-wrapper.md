@@ -288,8 +288,8 @@ All verified against the engine (tklr 1.0.43). `R` is `scripts/tklr_agent_wrappe
 | "Note: Sam prefers morning meetings" | `--type note --subject "Sam prefers morning meetings" --for alex` |
 | "Jot down that I am taking a walk" | `--type jot --subject "Taking a walk" --for alex` (timestamped now; pass `--when` for a different time) |
 | "That walk took an hour and a quarter, count it as exercise" | this follows the row above, so it edits that jot rather than filing a second one: `edit <id> --duration 1h15m --use exercise.walking` |
-| "I spent 45 minutes on the gutters this morning, log it as home maintenance" | already finished, so it is ONE command, not a create-then-edit: `--type jot --subject "Gutters" --duration 45m --use home.maintenance --for alex` |
-| "An hour and a half yesterday fixing the fence, same category" | the same, with the day named: `--type jot --subject "Fixing the fence" --when yesterday --duration 1h30m --use home.maintenance --for alex`. A duration belongs in `--duration` and a category in `--use`; a jot with the time in its subject and the category in `--note` is invisible to `uses` |
+| "I spent 45 minutes on the gutters this morning, log it as yard work" | already finished, so it is ONE command, not a create-then-edit: `--type jot --subject "Gutters" --duration 45m --use yard.work --for alex` |
+| "Two hours on the Ellis contract yesterday, bill it" | the same, with the day named: `--type jot --subject "Ellis contract" --when yesterday --duration 2h --use billing.ellis --for alex`. A duration belongs in `--duration` and a category in `--use`; a jot with the time in its subject and the category in `--note` is invisible to `uses` |
 | "Where did my time go this month?" | `uses` (add `--use exercise` to filter, `--months 2607-2608` for a range) |
 
 **`--when` is when the thing happens, never when the reminder fires.** "Class

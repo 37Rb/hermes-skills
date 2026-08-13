@@ -206,6 +206,22 @@ exist), `--alert` without `--via`, a `--when` it cannot parse, a goal without
 `--target`, `3/w` instead of `3/1w` — and warns without blocking when a timed
 reminder has **no alert** ("will not notify anyone") or no `--for`.
 
+**That "will not notify anyone" warning is the cue to ask, not to invent an
+offset.** After creating an event or a task with a due date, if they did not
+already name a reminder, confirm the booking and offer one the way an
+assistant would:
+
+> You're down for Friday at noon. Want a reminder before that? I can send it
+> here on Telegram, or to email.
+
+Then stop and wait. `$R channels` (or the letters `add` already printed)
+names what exists, in words — Telegram, email — never as `r` / `e`. One
+channel: name it, do not make them pick. They already said "nudge me 15
+minutes before": put `--alert` / `--via` on the create and do not ask again.
+When they answer, `edit <id> --alert 15m --via r` (or whatever they chose).
+Do not ask on an undated task, a note, a jot, or a goal. If they decline,
+leave it.
+
 There is no escape hatch for entries the flags cannot express. If a request
 needs something not listed above, say so rather than composing stored tokens by
 hand.
@@ -282,21 +298,21 @@ All verified against the engine (tklr 1.0.43). `R` is `scripts/tklr_agent_wrappe
 | "Dentist Friday at 3, remind me a day and an hour before" | `--type event --subject Dentist --when "friday 3pm" --duration 1h --for alex --alert 1d,1h --via r` |
 | "Put the bins out at 7pm on Tuesdays, remind me at 7" | the 7pm is when they want the ping: `--type task --subject "Put bins out" --when "tuesday 7pm" --repeat "Tuesdays" --for alex --remind-at 7pm --via r` |
 | "Jack's class is at 5:30, remind me at 4:45" | again the ping time is named, and the wrapper does the subtraction: `--type event --subject "Jiu jitsu" --when "thursday 5:30pm" --for alex --remind-at 4:45pm --via r` |
-| "Coffee with Sam tomorrow 11:30" | `--type event --subject "Coffee with Sam" --when "tomorrow 11:30" --duration 45m --for alex --alert 15m --via r` |
-| "Standup every weekday at 9" | `--type event --subject Standup --when "2026-08-03 9am" --duration 30m --repeat "weekdays" --for alex --alert 10m --via r` |
+| "Coffee with Sam tomorrow 11:30" | `--type event --subject "Coffee with Sam" --when "tomorrow 11:30" --duration 45m --for alex` — then ask if they want a reminder; they did not name one |
+| "Standup every weekday at 9" | `--type event --subject Standup --when "2026-08-03 9am" --duration 30m --repeat "weekdays" --for alex` — then ask; "ten minutes ahead is plenty" is `--alert 10m` |
 | "Pay the mortgage on the 1st every month" | `--type task --subject "Pay mortgage" --when 2026-08-01 --repeat "monthly" --priority 1 --for alex --alert 1d --via r,e` |
 | "Our anniversary is Aug 15, remind us both a week ahead" | `--type event --subject Anniversary --when "aug 15" --repeat y --for alex,jordan --alert 1w,1d --via r,a` |
-| "1:1 with Dana every other Tuesday at 10" | `--type event --subject "1:1 with Dana" --when "2026-08-04 10am" --duration 30m --repeat "every other Tuesday" --for alex --alert 10m --via r` |
+| "1:1 with Dana every other Tuesday at 10" | `--type event --subject "1:1 with Dana" --when "2026-08-04 10am" --duration 30m --repeat "every other Tuesday" --for alex` — then ask if they want a reminder |
 | "Jordan has swimming Tuesdays and Thursdays at 5:30, remind me 45 minutes before" | `--type event --subject "Jordan swimming" --when "2026-08-11 5:30pm" --duration 1h --repeat "Tuesdays and Thursdays" --for jordan --alert 45m --via r` |
 | "Remember to buy milk" | `--type task --subject "Buy milk" --for alex` |
 | "Renew my passport by Sept 1, start warning me a month out" | `--type task --subject "Renew passport" --when 2026-09-01 --priority 1 --notice 30d --for alex --alert 1w --via r` |
-| "Water the plants every 3 days after I last did it" | `--type task --subject "Water plants" --when 2026-08-01 --offset 3d --for alex --alert 1h --via r` |
+| "Water the plants every 3 days after I last did it" | `--type task --subject "Water plants" --when 2026-08-01 --offset 3d --for alex` — dated task, so ask after creating |
 | "Plan the trip — flights, hotel, dog sitter" | `--type project --subject "Plan trip" --for alex --step "Book flights" --step "Reserve hotel" --step "Arrange dog sitter"` |
 | "Renovate: demo, then rewire, then drywall" | `--type project --subject Renovate --for alex --step Demo --step Rewire --step Drywall --chain` |
 | "I want to exercise 3 times a week" | `--type goal --subject Exercise --when 2026-08-01 --target 3/1w --for alex` |
-| "Lunch with Priya at Cafe Ambrosia Tuesday noon" | `--type event --subject "Lunch with Priya" --when "tuesday noon" --duration 1h --location "Cafe Ambrosia" --for alex --alert 30m --via r` |
-| "Flight at 3pm Pacific on the 10th" | `--type event --subject "Flight to Seattle" --when "2026-08-10 3pm" --timezone US/Pacific --duration 5h --for alex --alert 3h --via r` |
-| "Team meeting at 2, 30 min travel each way" | `--type event --subject "Team meeting" --when "2026-08-06 2pm" --duration 1h --wrap "30m,30m" --for alex --alert 1h --via r` |
+| "Lunch with Priya at Cafe Ambrosia Tuesday noon" | `--type event --subject "Lunch with Priya" --when "tuesday noon" --duration 1h --location "Cafe Ambrosia" --for alex` — then ask if they want a reminder |
+| "Flight at 3pm Pacific on the 10th" | `--type event --subject "Flight to Seattle" --when "2026-08-10 3pm" --timezone US/Pacific --duration 5h --for alex` — then ask |
+| "Team meeting at 2, 30 min travel each way" | `--type event --subject "Team meeting" --when "2026-08-06 2pm" --duration 1h --wrap "30m,30m" --for alex` — then ask |
 | "Taking the kids to chess club, 5:30 to 8, 20 minute drive each way" | one event, not a second "leave for" event: `--type event --subject "Chess club" --when "5:30pm" --duration 2h30m --wrap 20m --for alex` |
 | "Note: Sam prefers morning meetings" | `--type note --subject "Sam prefers morning meetings" --for alex` |
 | "Jot down that I am taking a walk" | `--type jot --subject "Taking a walk" --for alex` (timestamped now; pass `--when` for a different time) |

@@ -98,6 +98,19 @@ shape: one event, `--when 5:30pm --duration 2h30m --wrap 20m`.
 
 A follow-up that refines something you just created is an `edit` to that id.
 
+**After you create an event, or a task with a due date, offer a reminder —
+unless they already asked for one.** Create the thing first. Then confirm it
+the way a human assistant would, and ask: "You're down for Friday at noon.
+Want a reminder before that? I can send it here on Telegram, or to email."
+One short offer, not an interrogation. If they already said "nudge me 15
+minutes before", put that on the create and do not ask again. If they did
+not, do not invent `--alert`: the wrapper will warn "will not notify anyone",
+which is expected — that warning is the cue to ask, not to guess an offset.
+If only one channel exists, name it rather than making them pick. Name
+channels in words (Telegram, email), never as letters. When they answer,
+`edit` that id with `--alert` and `--via`. Do not ask on an undated task, a
+note, a jot, or a goal. If they decline, stop.
+
 ## The two commands that decide whether this goes well
 
 Both replace a judgment call that has gone wrong in live use every time it was
@@ -172,9 +185,10 @@ handing the user a command cheat sheet. See *How to talk about this skill*.
    that now" is the whole preamble.
 
    Ask only what you genuinely cannot determine, and only once: who else uses
-   this, and any choice `setup` explicitly reported it could not make. Never ask
-   which channel a new reminder should use — pick a sensible default from the
-   configured letters and say what you chose.
+   this, any choice `setup` explicitly reported it could not make, and — after
+   creating an event or a dated task they did not already attach a reminder
+   to — whether they want one, how far ahead, and on which channel. Setup
+   still does not ask which platform; that is the conversation they are on.
 
    An email address you already have is *determined*, not unknown — see
    `--email` in *Do this now*.
